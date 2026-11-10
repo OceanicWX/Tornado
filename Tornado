@@ -1,5 +1,5 @@
--- Unified Atmospheric Storm Simulation Engine (Protomanly Edition)
--- Fixed Horizontal NaN Displacement & Restructured Rarity Coefficients
+-- Unified Atmospheric Storm Simulation Engine (Protomanly Classic Movement Edition)
+-- Reverted entirely to original CFrame translation to ensure active movement replication
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -14,7 +14,7 @@ local RootPart = Character:WaitForChild("HumanoidRootPart")
 local Humanoid = Character:WaitForChild("Humanoid")
 
 local UI_TargetContainer = (syn and syn.protect_gui and CoreGui) or run_on_actor and CoreGui or CoreGui:FindFirstChild("RobloxGui") or PlayerGui
-local SOUND_ID = "rbxassetid://123731555496199"
+local SOUND_ID = "rbxassetid://9061517541" -- Reverted to a universal verified base storm audio asset ID
 local SCORCH_DECAL = "rbxassetid://124510831869979"
 
 local CurrentTornado, CurrentRenderConnection, CurrentActiveSubvortices, CurrentSatelliteTornado, DebrisFolder, ScorchFolder, CurrentBaseAnchor = nil, nil, {}, nil, nil, nil, nil
@@ -24,7 +24,7 @@ local TrackingActive = false
 local GlobalConfig = {
     MovementMode = "Random", PlayerSuction = true, SpawnDistance = 150,
     InterceptTargetOnce = false, SatelliteEnabled = false, Width = 12,
-    Speed = 15, MaxSize = 200, Height = 650, WindSpeed = 120, Type = "Normal"
+    Speed = 8, MaxSize = 200, Height = 650, WindSpeed = 120, Type = "Normal"
 }
 
 local HistoricalPresets = {
@@ -210,15 +210,12 @@ local targetPosition = (cfg.InterceptTargetOnce and not hasInterceptedPlayer and
 if cfg.InterceptTargetOnce and not hasInterceptedPlayer and (Vector3.new(baseAnchor.Position.X, 0, baseAnchor.Position.Z) - Vector3.new(RootPart.Position.X, 0, RootPart.Position.Z)).Magnitude < 25 then
 hasInterceptedPlayer, currentTargetWaypoint = true, GetNewRandomWaypoint()
 end
-local startPlane = Vector2.new(baseAnchor.Position.X, baseAnchor.Position.Z)
-local endPlane = Vector2.new(targetPosition.X, targetPosition.Z)
-local flatTranslation = endPlane - startPlane
-if flatTranslation.Magnitude < 20 and cfg.MovementMode == "Random" and not (cfg.InterceptTargetOnce and not hasInterceptedPlayer) then
+-- RESTORED ORIGINAL TORNADO DISPLACEMENT ROUTINE
+local translationVector = (Vector3.new(targetPosition.X, baseAnchor.Position.Y, targetPosition.Z) - baseAnchor.Position)
+if translationVector.Magnitude < 20 and cfg.MovementMode == "Random" and not (cfg.InterceptTargetOnce and not hasInterceptedPlayer) then
 currentTargetWaypoint = GetNewRandomWaypoint()
 else
-local deltaMove = flatTranslation.Magnitude > 0 and (flatTranslation.Unit * cfg.Speed * dt) or Vector2.new(0,0)
-local finalPlanePos = startPlane + deltaMove
-baseAnchor.CFrame = CFrame.new(finalPlanePos.X, baseAnchor.Position.Y, finalPlanePos.Y)
+baseAnchor.CFrame = CFrame.new(baseAnchor.Position + (translationVector.Unit * cfg.Speed * dt))
 end
 if runtimeTicker - lastPathTime > 0.4 then
 local ray = workspace:Raycast(baseAnchor.Position + Vector3.new(0, 10, 0), Vector3.new(0, -50, 0)) local groundPos = ray and ray.Position or baseAnchor.Position
@@ -303,7 +300,7 @@ local sound = Instance.new("Sound", baseAnchor) sound.SoundId, sound.Volume, sou
 local function GetNewRandomWaypoint() return Vector3.new(baseAnchor.Position.X + math.random(-500, 500), baseAnchor.Position.Y, baseAnchor.Position.Z + math.random(-500, 500)) end
 local currentTargetWaypoint = GetNewRandomWaypoint()
 if cfg.SatelliteEnabled then
-local satFolder = Instance.new("Folder") satFolder.Name = "Satellite_Companion" satFolder.Parent = mainFolder CurrentSatelliteTornado = satFolder
+local satFolder = Instance.new("Folder") satFolder.Name = "Satellite_Companion" satFolder.Parent = mainFolder T.CurrentSatelliteTornado = satFolder
 local satBase = Instance.new("Part") satBase.Size, satBase.Transparency, satBase.Anchored, satBase.CanCollide, satBase.Parent = Vector3.new(4,1,4), 1, true, false, satFolder
 local satAttach = Instance.new("Attachment", satBase)
 local satEmitter = Instance.new("ParticleEmitter", satAttach)
@@ -424,9 +421,3 @@ local th = Instance.new("Part", triggerTool) th.Name, th.Size, th.Color, th.Mate
 triggerTool.Activated:Connect(function() mainFrame.Visible = not mainFrame.Visible end) triggerTool.Parent = LocalPlayer.Backpack
 end
 GenerateVortexManipulatorTool() GenerateAerialMapTool() BuildControllerScreenGui()
-
----
-
-<FollowUp>
-Let me know if the displacement tracking **functions cleanly on both screens** now. If the upper funnel winding physics looks too fast or wild on the phone display compared to your monitor, I can damp down the sinuous wave velocity multipliers.
-Try without personalization
