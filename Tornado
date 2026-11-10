@@ -1,5 +1,5 @@
 -- Unified Atmospheric Storm Simulation Engine (Protomanly Edition)
--- Safe to execute as one complete script block on advanced Roblox Executors
+-- Fully optimized for cross-platform replication (PC & Mobile)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -24,7 +24,7 @@ local TrackingActive = false
 local GlobalConfig = {
     MovementMode = "Random", PlayerSuction = true, SpawnDistance = 150,
     InterceptTargetOnce = false, SatelliteEnabled = false, Width = 12,
-    Speed = 8, MaxSize = 200, Height = 650, WindSpeed = 120, Type = "Normal"
+    Speed = 15, MaxSize = 200, Height = 650, WindSpeed = 120, Type = "Normal"
 }
 
 local HistoricalPresets = {
@@ -77,7 +77,7 @@ local function CheckAndSuckUnanchoredParts(cfg)
     for _, part in ipairs(parts) do
         if part:IsA("BasePart") and not part:GetAttribute("CapturedByVortex") then
             local pName = part.Name
-            if pName ~= "Baseplate" and pName ~= "SpawnedStormInterceptor" and pName ~= "SpawnedStormInterceptor2" and pName ~= "Delta_VehicleInstance" and pName ~= "DeltaVehicle_Instance" and not part:IsDescendantOf(Character) and not part:IsDescendantOf(CurrentTornado) and pName ~= "SimulationBase" and pName ~= "MesoStormCloud" and pName ~= "Tornado_Scorches" and not part:IsDescendantOf(ScorchFolder) then
+            if pName ~= "Baseplate" and pName ~= "SpawnedStormInterceptor" and pName ~= "SpawnedStormInterceptor2" and pName ~= "Delta_VehicleInstance" and pName ~= "DeltaVehicle_Instance" and pName ~= "BasePlate" and not part:IsDescendantOf(Character) and not part:IsDescendantOf(CurrentTornado) and pName ~= "SimulationBase" and pName ~= "MesoStormCloud" and pName ~= "Tornado_Scorches" and not part:IsDescendantOf(ScorchFolder) then
                 local pPos = part.Position
                 local partFlatPos = Vector3.new(pPos.X, 0, pPos.Z)
                 local horizontalDistanceToPlayer = (partFlatPos - characterFlatPos).Magnitude
@@ -159,7 +159,7 @@ if not baseAnchor or not baseAnchor.Parent then return end
 runtimeTicker = runtimeTicker + dt
 local computedTopSize = cfg.MaxSize
 local baseWidth = cfg.Width
-if baseWidth <= 200 then
+if computedTopSize <= 200 then
 baseWidth = cfg.Width + (math.sin(runtimeTicker * 2.5) * (cfg.Width * 0.3))
 computedTopSize = cfg.MaxSize + (math.cos(runtimeTicker * 1.8) * (cfg.MaxSize * 0.2))
 end
@@ -200,12 +200,11 @@ end
 Lighting.OutdoorAmbient = Lighting.OutdoorAmbient:Lerp(currentFinalColor, dt * 1.5)
 Lighting.FogColor = Lighting.FogColor:Lerp(baseAmbientColor, dt * 1.5)
 Lighting.FogEnd = math.max(100, Lighting.FogEnd - ((Lighting.FogEnd - (1200 * (1 - baseFogDensity))) * dt * 0.8))
-if currentDescentScale < 1 then
-currentDescentScale = math.min(1, currentDescentScale + (dt / 4))
-funnelEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, baseWidth), NumberSequenceKeypoint.new(math.clamp(0.5 * currentDescentScale, 0.01, 0.98), (computedTopSize * 0.4) * currentDescentScale), NumberSequenceKeypoint.new(math.clamp(1 * currentDescentScale, 0.02, 1), computedTopSize * currentDescentScale)})
-else
-funnelEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, baseWidth), NumberSequenceKeypoint.new(0.5, computedTopSize * 0.45), NumberSequenceKeypoint.new(1, computedTopSize)})
-end
+funnelEmitter.Size = NumberSequence.new({
+NumberSequenceKeypoint.new(0, baseWidth),
+NumberSequenceKeypoint.new(0.5, math.clamp(computedTopSize * 0.45, 1, 1000)),
+NumberSequenceKeypoint.new(1, math.clamp(computedTopSize, 2, 1000))
+})
 stormCloud.CFrame = baseAnchor.CFrame * CFrame.new(0, cfg.Height, 0)
 local targetPosition = (cfg.InterceptTargetOnce and not hasInterceptedPlayer and RootPart.Position) or (cfg.MovementMode == "Follow Player" and RootPart.Position) or currentTargetWaypoint
 if cfg.InterceptTargetOnce and not hasInterceptedPlayer and (Vector3.new(baseAnchor.Position.X, 0, baseAnchor.Position.Z) - Vector3.new(RootPart.Position.X, 0, RootPart.Position.Z)).Magnitude < 25 then
@@ -284,7 +283,8 @@ local funnelEmitter = Instance.new("ParticleEmitter", funnelAttach)
 funnelEmitter.Texture, funnelEmitter.Rate, funnelEmitter.Lifetime, funnelEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", 260, NumberRange.new(5, 8), NumberRange.new(50, 85)
 funnelEmitter.Acceleration, funnelEmitter.SpreadAngle, funnelEmitter.RotSpeed = Vector3.new(0, 25, 0), Vector2.new(8, 8), NumberRange.new(350, 700)
 funnelEmitter.Color = ColorSequence.new(tType == "DustDevil" and Color3.fromRGB(175, 125, 85) or Color3.fromRGB(110, 110, 115))
-local currentDescentScale = 0 funnelEmitter.Size = NumberSequence.new(0)
+local currentDescentScale = 1
+funnelEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, cfg.Width), NumberSequenceKeypoint.new(0.5, math.clamp(cfg.MaxSize*0.45, 1, 1000)), NumberSequenceKeypoint.new(1, math.clamp(cfg.MaxSize, 2, 1000))})
 funnelEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, tType == "NonCondensation" and 1 or 0.4), NumberSequenceKeypoint.new(1, 1)})
 local debrisFieldEmitter = Instance.new("ParticleEmitter", funnelAttach)
 debrisFieldEmitter.Texture, debrisFieldEmitter.Rate, debrisFieldEmitter.Lifetime, debrisFieldEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", 180, NumberRange.new(2, 4), NumberRange.new(25, 60)
@@ -318,7 +318,7 @@ if Character:FindFirstChild(toolName) then Character[toolName]:Destroy() end
 local tool = Instance.new("Tool") tool.Name, tool.RequiresHandle = toolName, true
 local handle = Instance.new("Part", tool) handle.Name, handle.Size, handle.Color, handle.Material = "Handle", Vector3.new(1, 4, 1), Color3.fromRGB(0, 162, 255), Enum.Material.Neon
 tool.Activated:Connect(function() if CurrentTornado then ClearActiveTornado() else SpawnTornadoSimulation() end end)
-tool.Parent = bp tool:Clone().Parent = Character
+tool.Parent = bp task.wait() pcall(function() tool:Clone().Parent = Character end)
 end
 local function GenerateAerialMapTool()
 local bp = LocalPlayer:WaitForChild("Backpack") local toolName = "Aerial Tracker Map"
@@ -339,7 +339,7 @@ for _, p in ipairs(PathPoints) do if p.Beam then p.Beam.Enabled = false end end
 end
 end)
 tool.Unequipped:Connect(function() TrackingActive = false if MapCameraConnection then MapCameraConnection:Disconnect() MapCameraConnection = nil end workspace.CurrentCamera.CameraType = Enum.CameraType.Custom for _, p in ipairs(PathPoints) do if p.Beam then p.Beam.Enabled = false end end end)
-tool.Parent = bp tool:Clone().Parent = Character
+tool.Parent = bp task.wait() pcall(function() tool:Clone().Parent = Character end)
 end
 local function BuildControllerScreenGui()
 local guiName = "VortexSimulation_Dashboard" local original = UI_TargetContainer:FindFirstChild(guiName) if original then original:Destroy() end
@@ -387,7 +387,7 @@ else rngWidth, rngMaxSize = math.random(18, 35), math.random(75, 120) end
 end
 SpawnTornadoSimulation({
 Width = rngWidth, MaxSize = rngMaxSize,
-Speed = math.random(3, 22), Height = math.random(350, 850),
+Speed = math.random(6, 25), Height = math.random(350, 850),
 WindSpeed = math.random(50, 310), Type = pickedType,
 SpawnDistance = GlobalConfig.SpawnDistance, MovementMode = GlobalConfig.MovementMode,
 PlayerSuction = GlobalConfig.PlayerSuction, SatelliteEnabled = GlobalConfig.SatelliteEnabled,
