@@ -1,5 +1,5 @@
 -- Unified Atmospheric Storm Simulation Engine (Protomanly Edition)
--- Fully optimized for cross-platform replication (PC & Mobile)
+-- Fixed Horizontal NaN Displacement & Restructured Rarity Coefficients
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -153,7 +153,7 @@ end
 elseif Humanoid then Humanoid.CameraOffset = Vector3.new(0,0,0) end
 end
 end
-local function CoreRenderPhysicsLoop(cfg, baseAnchor, funnelEmitter, stormCloud, hasInterceptedPlayer, currentTargetWaypoint, GetNewRandomWaypoint, lastPathTime, currentDescentScale, runtimeTicker, angularPlayerOrbit, rainEmitter, funnelAttach)
+local function CoreRenderPhysicsLoop(cfg, baseAnchor, funnelEmitter, stormCloud, hasInterceptedPlayer, currentTargetWaypoint, GetNewRandomWaypoint, lastPathTime, currentDescentScale, runtimeTicker, angularPlayerOrbit, rainEmitter, funnelAttach, debrisFieldEmitter)
 CurrentRenderConnection = RunService.RenderStepped:Connect(function(dt)
 if not baseAnchor or not baseAnchor.Parent then return end
 runtimeTicker = runtimeTicker + dt
@@ -201,7 +201,7 @@ Lighting.OutdoorAmbient = Lighting.OutdoorAmbient:Lerp(currentFinalColor, dt * 1
 Lighting.FogColor = Lighting.FogColor:Lerp(baseAmbientColor, dt * 1.5)
 Lighting.FogEnd = math.max(100, Lighting.FogEnd - ((Lighting.FogEnd - (1200 * (1 - baseFogDensity))) * dt * 0.8))
 funnelEmitter.Size = NumberSequence.new({
-NumberSequenceKeypoint.new(0, baseWidth),
+NumberSequenceKeypoint.new(0, math.max(baseWidth, 1)),
 NumberSequenceKeypoint.new(0.5, math.clamp(computedTopSize * 0.45, 1, 1000)),
 NumberSequenceKeypoint.new(1, math.clamp(computedTopSize, 2, 1000))
 })
@@ -210,11 +210,15 @@ local targetPosition = (cfg.InterceptTargetOnce and not hasInterceptedPlayer and
 if cfg.InterceptTargetOnce and not hasInterceptedPlayer and (Vector3.new(baseAnchor.Position.X, 0, baseAnchor.Position.Z) - Vector3.new(RootPart.Position.X, 0, RootPart.Position.Z)).Magnitude < 25 then
 hasInterceptedPlayer, currentTargetWaypoint = true, GetNewRandomWaypoint()
 end
-local translationVector = (Vector3.new(targetPosition.X, baseAnchor.Position.Y, targetPosition.Z) - baseAnchor.Position)
-if translationVector.Magnitude < 20 and cfg.MovementMode == "Random" and not (cfg.InterceptTargetOnce and not hasInterceptedPlayer) then
+local startPlane = Vector2.new(baseAnchor.Position.X, baseAnchor.Position.Z)
+local endPlane = Vector2.new(targetPosition.X, targetPosition.Z)
+local flatTranslation = endPlane - startPlane
+if flatTranslation.Magnitude < 20 and cfg.MovementMode == "Random" and not (cfg.InterceptTargetOnce and not hasInterceptedPlayer) then
 currentTargetWaypoint = GetNewRandomWaypoint()
 else
-baseAnchor.CFrame = CFrame.new(baseAnchor.Position + (translationVector.Unit * cfg.Speed * dt))
+local deltaMove = flatTranslation.Magnitude > 0 and (flatTranslation.Unit * cfg.Speed * dt) or Vector2.new(0,0)
+local finalPlanePos = startPlane + deltaMove
+baseAnchor.CFrame = CFrame.new(finalPlanePos.X, baseAnchor.Position.Y, finalPlanePos.Y)
 end
 if runtimeTicker - lastPathTime > 0.4 then
 local ray = workspace:Raycast(baseAnchor.Position + Vector3.new(0, 10, 0), Vector3.new(0, -50, 0)) local groundPos = ray and ray.Position or baseAnchor.Position
@@ -283,14 +287,13 @@ local funnelEmitter = Instance.new("ParticleEmitter", funnelAttach)
 funnelEmitter.Texture, funnelEmitter.Rate, funnelEmitter.Lifetime, funnelEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", 260, NumberRange.new(5, 8), NumberRange.new(50, 85)
 funnelEmitter.Acceleration, funnelEmitter.SpreadAngle, funnelEmitter.RotSpeed = Vector3.new(0, 25, 0), Vector2.new(8, 8), NumberRange.new(350, 700)
 funnelEmitter.Color = ColorSequence.new(tType == "DustDevil" and Color3.fromRGB(175, 125, 85) or Color3.fromRGB(110, 110, 115))
-local currentDescentScale = 1
-funnelEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, cfg.Width), NumberSequenceKeypoint.new(0.5, math.clamp(cfg.MaxSize*0.45, 1, 1000)), NumberSequenceKeypoint.new(1, math.clamp(cfg.MaxSize, 2, 1000))})
+funnelEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, math.max(cfg.Width, 1)), NumberSequenceKeypoint.new(0.5, math.clamp(cfg.MaxSize*0.45, 1, 1000)), NumberSequenceKeypoint.new(1, math.clamp(cfg.MaxSize, 2, 1000))})
 funnelEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, tType == "NonCondensation" and 1 or 0.4), NumberSequenceKeypoint.new(1, 1)})
 local debrisFieldEmitter = Instance.new("ParticleEmitter", funnelAttach)
-debrisFieldEmitter.Texture, debrisFieldEmitter.Rate, debrisFieldEmitter.Lifetime, debrisFieldEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", 180, NumberRange.new(2, 4), NumberRange.new(25, 60)
+debrisFieldEmitter.Texture, debrisFieldEmitter.Rate, debrisFieldEmitter.Lifetime, debrisFieldEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", (tType == "NonCondensation" and 15 or 180), NumberRange.new(2, 4), NumberRange.new(25, 60)
 debrisFieldEmitter.SpreadAngle, debrisFieldEmitter.Color = Vector2.new(360, 45), ColorSequence.new(Color3.fromRGB(115, 100, 85))
 debrisFieldEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, cfg.Width * 1.5), NumberSequenceKeypoint.new(1, cfg.Width * 3.5)})
-debrisFieldEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(1, 1)})
+debrisFieldEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, tType == "NonCondensation" and 0.75 or 0.2), NumberSequenceKeypoint.new(1, 1)})
 local globalRainAttach = Instance.new("Attachment", RootPart)
 local globalRainEmitter = Instance.new("ParticleEmitter", globalRainAttach)
 globalRainEmitter.Texture, globalRainEmitter.Rate, globalRainEmitter.Lifetime, globalRainEmitter.Speed = "rbxasset://textures/particles/rain.dds", (tType == "DustDevil" and 0 or 350), NumberRange.new(1, 2), NumberRange.new(80, 140)
@@ -309,7 +312,7 @@ satEmitter.Size, satEmitter.RotSpeed = NumberSequence.new({NumberSequenceKeypoin
 end
 SimulatedDebrisList = {}
 local runtimeTicker, angularPlayerOrbit, lastPathTime = 0, 0, 0
-CoreRenderPhysicsLoop(cfg, baseAnchor, funnelEmitter, stormCloud, hasInterceptedPlayer, currentTargetWaypoint, GetNewRandomWaypoint, lastPathTime, currentDescentScale, runtimeTicker, angularPlayerOrbit, globalRainEmitter, funnelAttach)
+CoreRenderPhysicsLoop(cfg, baseAnchor, funnelEmitter, stormCloud, hasInterceptedPlayer, currentTargetWaypoint, GetNewRandomWaypoint, lastPathTime, currentDescentScale, runtimeTicker, angularPlayerOrbit, globalRainEmitter, funnelAttach, debrisFieldEmitter)
 end
 local function GenerateVortexManipulatorTool()
 local bp = LocalPlayer:WaitForChild("Backpack") local toolName = "Tornado Control Wand"
@@ -376,8 +379,13 @@ local spawnBtn = Instance.new("TextButton", mainFrame) spawnBtn.Size, spawnBtn.P
 spawnBtn.MouseButton1Click:Connect(function() GlobalConfig.Type = "Normal" SpawnTornadoSimulation() end) Instance.new("UICorner", spawnBtn).CornerRadius = UDim.new(0,5)
 local rngBtn = Instance.new("TextButton", mainFrame) rngBtn.Size, rngBtn.Position, rngBtn.BackgroundColor3, rngBtn.Text, rngBtn.TextColor3, rngBtn.Font, rngBtn.TextSize, rngBtn.BorderSizePixel = UDim2.new(0.18, 0, 0, 40), UDim2.new(0, 120, 1, -50), Color3.fromRGB(150, 0, 210), "RNG SPAWN", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 12, 0
 rngBtn.MouseButton1Click:Connect(function()
-local pool = {"Normal", "DustDevil", "NonCondensation"}
-local pickedType = pool[math.random(1, #pool)]
+local typeRoll = math.random(1, 100)
+local pickedType = "Normal"
+if typeRoll <= 8 then
+pickedType = "DustDevil"
+elseif typeRoll <= 16 then
+pickedType = "NonCondensation"
+end
 local rngWidth, rngMaxSize = math.random(5, 60), math.random(30, 450)
 if pickedType == "DustDevil" then
 local devilScale = math.random(1, 3)
@@ -387,7 +395,7 @@ else rngWidth, rngMaxSize = math.random(18, 35), math.random(75, 120) end
 end
 SpawnTornadoSimulation({
 Width = rngWidth, MaxSize = rngMaxSize,
-Speed = math.random(6, 25), Height = math.random(350, 850),
+Speed = math.random(10, 25), Height = math.random(350, 850),
 WindSpeed = math.random(50, 310), Type = pickedType,
 SpawnDistance = GlobalConfig.SpawnDistance, MovementMode = GlobalConfig.MovementMode,
 PlayerSuction = GlobalConfig.PlayerSuction, SatelliteEnabled = GlobalConfig.SatelliteEnabled,
@@ -416,3 +424,9 @@ local th = Instance.new("Part", triggerTool) th.Name, th.Size, th.Color, th.Mate
 triggerTool.Activated:Connect(function() mainFrame.Visible = not mainFrame.Visible end) triggerTool.Parent = LocalPlayer.Backpack
 end
 GenerateVortexManipulatorTool() GenerateAerialMapTool() BuildControllerScreenGui()
+
+---
+
+<FollowUp>
+Let me know if the displacement tracking **functions cleanly on both screens** now. If the upper funnel winding physics looks too fast or wild on the phone display compared to your monitor, I can damp down the sinuous wave velocity multipliers.
+Try without personalization
