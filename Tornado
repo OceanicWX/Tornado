@@ -1,13 +1,10 @@
 --[[ 
-    ADVANCED METEOROLOGICAL TORNADO & STORM SIMULATION SUITE (COMPLETE V6)
-    Includes ALL V5 Systems PLUS:
-    - Dynamic Cloud-to-Ground Funnel Height Coupling (Funnel automatically shortens/lengthens with Cloud Height)
-    - Live Interceptor Telemetry HUD (Real-Time Barometer mb, Wind MPH, Core Distance & Inflow Arrow)
-    - Deployable Weather Probes ("Turtles") with Peak Wind & Min Pressure Logging
-    - Optional 4-Stage Tornado Lifecycle (Touchdown -> Mature -> Peak -> Rope-Out & Lift)
-    - Dynamic Debris Ball Color Darkening & RFD (Rear-Flank Downdraft) Wind/Dust Bursts
-    - Doppler Velocity Couplet (Red/Green) Overlay & Click-to-Steer Waypoints in Aerial View
-    - Distant Tornado Warning Sirens, Screen Mud/Crack Impact FX & Progressive Structural Weakening
+    ADVANCED METEOROLOGICAL TORNADO & STORM SIMULATION SUITE (V8.1)
+    Tailored for OceanicWX Universal Interceptors & Twisted-Style Storm Chasing
+    Updates in V8.1:
+    - Added "Dirt Tracks & Scouring" toggle in the GUI (hides/disables ground scorch decals while preserving Aerial Radar track beams).
+    - Sub-EF2 Structural Protection: Tornadoes below EF2 (< 111 MPH or < 45 studs) only lift/tilt already-unanchored parts.
+    - Enforced Wedge Top > Bottom Scaling & Smooth Gradual Funnel Widening Curve.
 ]]
 
 local Players = game:GetService("Players")
@@ -19,8 +16,13 @@ local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
+local SCRIPT_VERSION = "V8.1 — Dirt Track Toggle & Gradual Wedge Edition"
 local VORTEX_SOUND_ID = "rbxassetid://123731555496199"
 local SIREN_SOUND_ID = "rbxassetid://138081500"
+
+-- EF2 Threshold Constants (EF2 begins at 111 MPH)
+local EF2_MIN_WIND_MPH = 111
+local EF2_MIN_BASE_WIDTH = 45
 
 -- Protected Vehicle / Interceptor Group Names
 local EXCLUDED_GROUP_NAMES = {
@@ -35,7 +37,7 @@ local ActiveProbes = {}
 local ActiveConnections = {}
 local CapturedDebris = {}
 local OriginalPartStates = {}
-local PartStressCounters = {} -- Tracks gradual structural weakening hits
+local PartStressCounters = {}
 
 local ScorchFolder = workspace:FindFirstChild("TornadoScorchAndTracks") or Instance.new("Folder", workspace)
 ScorchFolder.Name = "TornadoScorchAndTracks"
@@ -43,6 +45,11 @@ ScorchFolder.Name = "TornadoScorchAndTracks"
 local ControlGuiRef = nil
 local TelemetryHudRef = nil
 local ScreenImpactOverlayRef = nil
+
+local SessionRecords = {
+	PeakWindMph = 0,
+	LowestPressureMb = 1013
+}
 
 local SimulationConfig = {
 	BaseWidth = 18,
@@ -58,10 +65,12 @@ local SimulationConfig = {
 	SatelliteTornadoEnabled = false,
 	AerialViewActive = false,
 	WeatherPipelineActive = true,
-	-- New V6 Feature Toggles
+	-- Telemetry, Lifecycle & Intercept Immersion Options
 	TelemetryHudEnabled = true,
 	LifecycleProgressionEnabled = false,
+	CorePunchImmersionEnabled = true,
 	DebrisBallAndRfdEnabled = true,
+	DirtTracksEnabled = true,
 	DopplerOverlayEnabled = true,
 	ClickToSteerEnabled = true,
 	StormSirensEnabled = true,
@@ -76,23 +85,23 @@ local AerialCameraState = {
 	PanOffset = Vector3.zero
 }
 
--- Historical Real-World Tornado Preset Database
+-- Historical Real-World Tornado Preset Database (Wedges strictly have TopMaxSize > BaseWidth)
 local HistoricalPresets = {
-	{ Name = "El Reno 2013 (2.6 Mi Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 340, TopMaxSize = 420, Height = 450, SuctionRange = 260, WindSpeed = 295, MovementSpeed = 16, Satellite = true },
-	{ Name = "Hallam 2004 (2.5 Mi Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 320, TopMaxSize = 390, Height = 440, SuctionRange = 240, WindSpeed = 220, MovementSpeed = 13, Satellite = false },
-	{ Name = "Greensburg 2007 (1.7 Mi Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 250, TopMaxSize = 340, Height = 420, SuctionRange = 200, WindSpeed = 235, MovementSpeed = 10, Satellite = true },
-	{ Name = "Joplin 2011 (EF5 Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 230, TopMaxSize = 320, Height = 400, SuctionRange = 190, WindSpeed = 250, MovementSpeed = 12, Satellite = false },
-	{ Name = "Moore 2013 (EF5 Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 210, TopMaxSize = 310, Height = 410, SuctionRange = 180, WindSpeed = 240, MovementSpeed = 11, Satellite = false },
-	{ Name = "Bridge Creek 1999 (Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 220, TopMaxSize = 330, Height = 430, SuctionRange = 195, WindSpeed = 301, MovementSpeed = 14, Satellite = true },
-	{ Name = "El Reno 2011 (EF5 Multi-Vortex)", Variant = "Normal", IsWedge = true, BaseWidth = 185, TopMaxSize = 300, Height = 420, SuctionRange = 175, WindSpeed = 260, MovementSpeed = 18, Satellite = true },
+	{ Name = "El Reno 2013 (2.6 Mi Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 280, TopMaxSize = 460, Height = 450, SuctionRange = 260, WindSpeed = 295, MovementSpeed = 16, Satellite = true },
+	{ Name = "Hallam 2004 (2.5 Mi Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 260, TopMaxSize = 430, Height = 440, SuctionRange = 240, WindSpeed = 220, MovementSpeed = 13, Satellite = false },
+	{ Name = "Greensburg 2007 (1.7 Mi Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 210, TopMaxSize = 370, Height = 420, SuctionRange = 200, WindSpeed = 235, MovementSpeed = 10, Satellite = true },
+	{ Name = "Joplin 2011 (EF5 Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 195, TopMaxSize = 350, Height = 400, SuctionRange = 190, WindSpeed = 250, MovementSpeed = 12, Satellite = false },
+	{ Name = "Moore 2013 (EF5 Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 180, TopMaxSize = 340, Height = 410, SuctionRange = 180, WindSpeed = 240, MovementSpeed = 11, Satellite = false },
+	{ Name = "Bridge Creek 1999 (Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 190, TopMaxSize = 360, Height = 430, SuctionRange = 195, WindSpeed = 301, MovementSpeed = 14, Satellite = true },
+	{ Name = "El Reno 2011 (EF5 Multi-Vortex)", Variant = "Normal", IsWedge = true, BaseWidth = 165, TopMaxSize = 325, Height = 420, SuctionRange = 175, WindSpeed = 260, MovementSpeed = 18, Satellite = true },
 	{ Name = "Jarrell 1997 (Dead Man)", Variant = "Normal", IsWedge = false, BaseWidth = 65, TopMaxSize = 260, Height = 380, SuctionRange = 150, WindSpeed = 260, MovementSpeed = 4, Satellite = false }
 }
 
 -- Famous Storm-Chasing Vehicle Intercepts
 local InterceptedTornadoes = {
 	{ Name = "Aurora 2009 (Dominator 1)", Variant = "Normal", IsWedge = false, BaseWidth = 55, TopMaxSize = 210, Height = 360, SuctionRange = 125, WindSpeed = 145, MovementSpeed = 14, Satellite = true },
-	{ Name = "Lebanon 2013 (TIV 2 Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 205, TopMaxSize = 310, Height = 410, SuctionRange = 180, WindSpeed = 175, MovementSpeed = 15, Satellite = false },
-	{ Name = "Spalding 2023 (Dominator 3)", Variant = "Normal", IsWedge = true, BaseWidth = 190, TopMaxSize = 290, Height = 400, SuctionRange = 165, WindSpeed = 165, MovementSpeed = 13, Satellite = false }
+	{ Name = "Lebanon 2013 (TIV 2 Wedge)", Variant = "Normal", IsWedge = true, BaseWidth = 175, TopMaxSize = 330, Height = 410, SuctionRange = 180, WindSpeed = 175, MovementSpeed = 15, Satellite = false },
+	{ Name = "Spalding 2023 (Dominator 3)", Variant = "Normal", IsWedge = true, BaseWidth = 165, TopMaxSize = 315, Height = 400, SuctionRange = 165, WindSpeed = 165, MovementSpeed = 13, Satellite = false }
 }
 
 local function getCharacterData()
@@ -102,8 +111,37 @@ local function getCharacterData()
 	return char, root, hum
 end
 
+-- Helper: Builds a smooth, gradual wedge size sequence where Top is always > Bottom
+local function buildFunnelSizeSequence(baseW, topW, isWedge)
+	local safeBase = math.max(4, baseW)
+	local safeTop = math.max(safeBase + 25, topW)
+
+	if isWedge then
+		safeTop = math.max(math.floor(safeBase * 1.45), safeBase + 65, topW)
+		local diff = safeTop - safeBase
+		return NumberSequence.new({
+			NumberSequenceKeypoint.new(0, safeBase),
+			NumberSequenceKeypoint.new(0.33, safeBase + (diff * 0.28)),
+			NumberSequenceKeypoint.new(0.66, safeBase + (diff * 0.65)),
+			NumberSequenceKeypoint.new(1, safeTop)
+		})
+	else
+		return NumberSequence.new({
+			NumberSequenceKeypoint.new(0, safeBase),
+			NumberSequenceKeypoint.new(0.5, safeBase + ((safeTop - safeBase) * 0.45)),
+			NumberSequenceKeypoint.new(1, safeTop)
+		})
+	end
+end
+
+-- Helper: Returns true if tornado meets EF2+ strength to break joints and unanchor structures
+local function canBreakAnchoredStructures(tornadoObj)
+	if not tornadoObj then return false end
+	return (tornadoObj.WindSpeed >= EF2_MIN_WIND_MPH) and (tornadoObj.CurrentBaseWidth >= EF2_MIN_BASE_WIDTH)
+end
+
 -- ============================================================================
--- 1. EXCLUSION FILTER, BELOW-PLAYER PROTECTION & SIZE THRESHOLD CHECK
+-- 1. EXCLUSION FILTER, BELOW-PLAYER PROTECTION & EF2 STRUCTURAL GATE
 -- ============================================================================
 local function isInsideExcludedGroup(instance)
 	local current = instance
@@ -139,6 +177,14 @@ local function isExcludedPart(part, tornadoObj)
 		end
 	end
 
+	-- Sub-EF2 Rule: If windspeed < EF2 (111 MPH) OR size < EF2 (45 studs),
+	-- ignore anchored structures completely (only affect already-unanchored objects)
+	if tornadoObj and not canBreakAnchoredStructures(tornadoObj) then
+		if part.Anchored then
+			return true
+		end
+	end
+
 	-- Size-Based Debris Threshold (Scales with Tornado Base Width)
 	if tornadoObj then
 		local maxAllowedDimension = math.max(12, tornadoObj.CurrentBaseWidth * 0.65)
@@ -163,20 +209,25 @@ local function recordOriginalState(part)
 end
 
 -- ============================================================================
--- 2. AMBIENT WEATHER, MAP-WIDE RAIN CANOPY, SIRENS & LIGHTNING
+-- 2. AMBIENT WEATHER, MAP-WIDE RAIN, CORE DEBRIS SWIRL & SIRENS
 -- ============================================================================
 local OriginalLighting = {
 	Ambient = Lighting.Ambient,
 	OutdoorAmbient = Lighting.OutdoorAmbient,
 	FogColor = Lighting.FogColor,
+	FogStart = Lighting.FogStart,
 	FogEnd = Lighting.FogEnd,
 	ExposureCompensation = Lighting.ExposureCompensation
 }
 
 local GlobalRainPart, GlobalRainEmitter
-local function setupGlobalRainCanopy()
-	if GlobalRainPart then GlobalRainPart:Destroy() end
+local CoreInteriorPart, CoreInteriorDebrisEmitter
 
+local function setupPlayerAtmosphericAttachments()
+	if GlobalRainPart then GlobalRainPart:Destroy() end
+	if CoreInteriorPart then CoreInteriorPart:Destroy() end
+
+	-- 1. Map-Wide Overhead Rain Canopy
 	GlobalRainPart = Instance.new("Part")
 	GlobalRainPart.Name = "AtmosphericRainCanopy"
 	GlobalRainPart.Size = Vector3.new(320, 1, 320)
@@ -189,47 +240,68 @@ local function setupGlobalRainCanopy()
 	GlobalRainEmitter = Instance.new("ParticleEmitter", GlobalRainPart)
 	GlobalRainEmitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
 	GlobalRainEmitter.Rate = 0
-	GlobalRainEmitter.Lifetime = NumberRange.new(2.2, 3.5)
-	GlobalRainEmitter.Speed = NumberRange.new(125, 175)
-	GlobalRainEmitter.EmissionDirection = Enum.NormalId.Bottom
-	GlobalRainEmitter.Acceleration = Vector3.new(0, -190, 0)
-	GlobalRainEmitter.Orientation = Enum.ParticleOrientation.VelocityParallel
-	GlobalRainEmitter.SpreadAngle = Vector2.new(25, 25)
-	GlobalRainEmitter.Color = ColorSequence.new(Color3.fromRGB(195, 220, 255))
-	GlobalRainEmitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.9), NumberSequenceKeypoint.new(1, 1.4) })
-	GlobalRainEmitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.25), NumberSequenceKeypoint.new(1, 0.65) })
+GlobalRainEmitter.Lifetime = NumberRange.new(2.2, 3.5)
+GlobalRainEmitter.Speed = NumberRange.new(125, 175)
+GlobalRainEmitter.EmissionDirection = Enum.NormalId.Bottom
+GlobalRainEmitter.Acceleration = Vector3.new(0, -190, 0)
+GlobalRainEmitter.Orientation = Enum.ParticleOrientation.VelocityParallel
+GlobalRainEmitter.SpreadAngle = Vector2.new(25, 25)
+GlobalRainEmitter.Color = ColorSequence.new(Color3.fromRGB(195, 220, 255))
+GlobalRainEmitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.9), NumberSequenceKeypoint.new(1, 1.4) })
+GlobalRainEmitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.25), NumberSequenceKeypoint.new(1, 0.65) })
+-- 2. Interior Core-Punch Swirling Debris & Mist Field
+CoreInteriorPart = Instance.new("Part")
+CoreInteriorPart.Name = "CoreInterceptDebrisField"
+CoreInteriorPart.Size = Vector3.new(75, 24, 75)
+CoreInteriorPart.Anchored = true
+CoreInteriorPart.CanCollide = false
+CoreInteriorPart.Transparency = 1
+CoreInteriorPart:SetAttribute("IsTornadoComponent", true)
+CoreInteriorPart.Parent = workspace
+CoreInteriorDebrisEmitter = Instance.new("ParticleEmitter", CoreInteriorPart)
+CoreInteriorDebrisEmitter.Texture = "rbxasset://textures/particles/smoke_main.dds"
+CoreInteriorDebrisEmitter.Rate = 0
+CoreInteriorDebrisEmitter.Lifetime = NumberRange.new(0.8, 1.4)
+CoreInteriorDebrisEmitter.Speed = NumberRange.new(45, 85)
+CoreInteriorDebrisEmitter.SpreadAngle = Vector2.new(180, 35)
+CoreInteriorDebrisEmitter.RotSpeed = NumberRange.new(400, 800)
+CoreInteriorDebrisEmitter.Color = ColorSequence.new(Color3.fromRGB(95, 82, 68))
+CoreInteriorDebrisEmitter.Size = NumberSequence.new({
+NumberSequenceKeypoint.new(0, 2.5),
+NumberSequenceKeypoint.new(0.5, 6),
+NumberSequenceKeypoint.new(1, 10)
+})
+CoreInteriorDebrisEmitter.Transparency = NumberSequence.new({
+NumberSequenceKeypoint.new(0, 0.35),
+NumberSequenceKeypoint.new(1, 1)
+})
 end
-
 local function triggerStormSiren(position)
-	if not SimulationConfig.StormSirensEnabled then return end
-	local sirenAnchor = Instance.new("Part")
-	sirenAnchor.Size = Vector3.new(1, 1, 1)
-	sirenAnchor.Anchored = true
-	sirenAnchor.CanCollide = false
-	sirenAnchor.Transparency = 1
-	sirenAnchor.Position = position + Vector3.new(0, 40, 0)
-	sirenAnchor:SetAttribute("IsTornadoComponent", true)
-	sirenAnchor.Parent = ScorchFolder
-
-	local siren = Instance.new("Sound", sirenAnchor)
-	siren.SoundId = SIREN_SOUND_ID
-	siren.Volume = 1.2
-	siren.PlaybackSpeed = 0.72
-	siren.RollOffMaxDistance = 1400
-	siren:Play()
-
-	task.delay(10, function()
-		if sirenAnchor and sirenAnchor.Parent then
-			sirenAnchor:Destroy()
-		end
-	end)
+if not SimulationConfig.StormSirensEnabled then return end
+local sirenAnchor = Instance.new("Part")
+sirenAnchor.Size = Vector3.new(1, 1, 1)
+sirenAnchor.Anchored = true
+sirenAnchor.CanCollide = false
+sirenAnchor.Transparency = 1
+sirenAnchor.Position = position + Vector3.new(0, 40, 0)
+sirenAnchor:SetAttribute("IsTornadoComponent", true)
+sirenAnchor.Parent = ScorchFolder
+local siren = Instance.new("Sound", sirenAnchor)
+siren.SoundId = SIREN_SOUND_ID
+siren.Volume = 1.2
+siren.PlaybackSpeed = 0.72
+siren.RollOffMaxDistance = 1400
+siren:Play()
+task.delay(10, function()
+if sirenAnchor and sirenAnchor.Parent then
+sirenAnchor:Destroy()
 end
-
--- Screen Impact Flash (Mud/Rain/Crack Pulse during close intercepts)
+end)
+end
 local function triggerScreenImpactPulse()
-	if not SimulationConfig.ScreenImpactFxEnabled or not ScreenImpactOverlayRef then return end
-	ScreenImpactOverlayRef.ImageTransparency = 0.45
-TweenService:Create(ScreenImpactOverlayRef, TweenInfo.new(1.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+if not SimulationConfig.ScreenImpactFxEnabled or not ScreenImpactOverlayRef then return end
+ScreenImpactOverlayRef.ImageTransparency = 0.42
+TweenService:Create(ScreenImpactOverlayRef, TweenInfo.new(1.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 ImageTransparency = 1
 }):Play()
 end
@@ -280,17 +352,17 @@ beacon.Color = Color3.fromRGB(255, 120, 0)
 beacon.Range = 16
 beacon.Brightness = 2
 local billboard = Instance.new("BillboardGui", probePart)
-billboard.Size = UDim2.new(0, 175, 0, 56)
+billboard.Size = UDim2.new(0, 185, 0, 58)
 billboard.StudsOffset = Vector3.new(0, 4, 0)
 billboard.AlwaysOnTop = true
 local label = Instance.new("TextLabel", billboard)
 label.Size = UDim2.new(1, 0, 1, 0)
 label.BackgroundColor3 = Color3.fromRGB(15, 20, 28)
-label.BackgroundTransparency = 0.2
+label.BackgroundTransparency = 0.18
 label.TextColor3 = Color3.fromRGB(0, 255, 190)
 label.Font = Enum.Font.GothamBold
 label.TextSize = 11
-label.Text = "🐢 PROBE ACTIVE\nPeak: 0 MPH | Min: 1013 mb"
+label.Text = "🐢 PROBE DEPLOYED\nPeak: 0 MPH | Min: 1013 mb"
 Instance.new("UICorner", label).CornerRadius = UDim.new(0, 5)
 table.insert(ActiveProbes, {
 Part = probePart,
@@ -300,11 +372,9 @@ MinPressure = 1013
 })
 end
 -- ============================================================================
--- 4. CORE TORNADO GENERATOR (WITH CLOUD-HEIGHT FUNNEL COUPLING & DOPPLER)
+-- 4. CORE TORNADO GENERATOR (CLOUD-HEIGHT COUPLING, SATELLITE & SUBVORTICES)
 -- ============================================================================
 local spawnTornado
--- Dynamically scales funnel particle travel time & speed so the condensation column
--- always matches the exact Cloud Height (shortens when cloud is low, lengthens when high)
 local function applyCloudHeightToFunnel(funnelEmitter, cloudHeight, isWedge)
 local clampedHeight = math.clamp(cloudHeight, 80, 1200)
 local baseSpeed = math.clamp(clampedHeight * 0.22, 28, 160)
@@ -355,15 +425,15 @@ variant = "Normal"
 end
 isWedge = (variant == "Normal" and math.random(1, 100) <= 35)
 if isWedge then
-cfg.BaseWidth = math.random(170, 310)
-cfg.TopMaxSize = math.random(cfg.BaseWidth + 30, 420)
+cfg.BaseWidth = math.random(140, 260)
+cfg.TopMaxSize = math.random(math.floor(cfg.BaseWidth * 1.5), 440)
 else
 cfg.BaseWidth = math.random(12, 85)
 cfg.TopMaxSize = math.random(math.max(cfg.BaseWidth + 40, 120), 340)
 end
 cfg.Height = math.random(240, 460)
 cfg.SuctionRange = math.random(60, 220)
-cfg.WindSpeed = math.random(95, 285)
+cfg.WindSpeed = math.random(85, 285)
 cfg.MovementSpeed = math.random(6, 20)
 end
 local baseWidth = cfg.BaseWidth or SimulationConfig.BaseWidth
@@ -373,6 +443,9 @@ local suctionRange = cfg.SuctionRange or SimulationConfig.SuctionRange
 local windSpeed = cfg.WindSpeed or SimulationConfig.WindSpeed
 local moveSpeed = cfg.MovementSpeed or SimulationConfig.MovementSpeed
 local spawnDist = cfg.SpawnDistance or SimulationConfig.SpawnDistance
+if isWedge and topMaxSize <= baseWidth then
+topMaxSize = math.max(math.floor(baseWidth * 1.45), baseWidth + 65)
+end
 local spawnCFrame = cfg.OverrideCFrame or (root.CFrame * CFrame.new(0, 0, -spawnDist))
 -- 1. Core Ground Base Anchor
 local basePart = Instance.new("Part")
@@ -387,7 +460,7 @@ basePart.Parent = workspace
 if not isSubComponent then
 triggerStormSiren(basePart.Position)
 end
--- 2. Audio Engine (Continuous Loop Guarantee with PlaybackSpeed)
+-- 2. Audio Engine
 local tornadoSound = Instance.new("Sound")
 tornadoSound.Name = "VortexAudio"
 tornadoSound.SoundId = VORTEX_SOUND_ID
@@ -421,7 +494,7 @@ skyPart:SetAttribute("IsTornadoComponent", true)
 skyPart.Parent = workspace
 local skyAttachment = Instance.new("Attachment", skyPart)
 local baseAttachment = Instance.new("Attachment", basePart)
--- Doppler Velocity Couplet (Red/Green Radar Signature Ring, visible in Aerial Radar View)
+-- Doppler Velocity Couplet Ring
 local dopplerRing = Instance.new("Part")
 dopplerRing.Name = "DopplerVelocityCouplet"
 dopplerRing.Shape = Enum.PartType.Cylinder
@@ -442,13 +515,13 @@ coupletFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 Instance.new("UICorner", coupletFrame).CornerRadius = UDim.new(1, 0)
 local grad = Instance.new("UIGradient", coupletFrame)
 grad.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 255, 90)),   -- Inbound Green
-ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 230, 0)), -- Shear Core
-ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 35, 35))   -- Outbound Red
+ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 255, 90)),
+ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 230, 0)),
+ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 35, 35))
 })
 local funnelColor = Color3.fromRGB(115, 118, 125)
 local cloudColor = Color3.fromRGB(85, 88, 96)
-local funnelTransparency = NumberSequence.new({
+local normalFunnelTransparency = NumberSequence.new({
 NumberSequenceKeypoint.new(0, 0.2),
 NumberSequenceKeypoint.new(0.5, 0.12),
 NumberSequenceKeypoint.new(1, 0.85)
@@ -462,7 +535,7 @@ if variant == "DustDevil" then
 funnelColor = Color3.fromRGB(194, 142, 92)
 cloudColor = Color3.fromRGB(210, 160, 110)
 elseif variant == "NonCondensation" then
-funnelTransparency = NumberSequence.new(1)
+normalFunnelTransparency = NumberSequence.new(1)
 cloudTransparency = NumberSequence.new(1)
 end
 local cloudEmitter = Instance.new("ParticleEmitter", skyAttachment)
@@ -481,26 +554,12 @@ cloudEmitter.Transparency = cloudTransparency
 local funnelEmitter = Instance.new("ParticleEmitter", baseAttachment)
 funnelEmitter.Texture = "rbxasset://textures/particles/smoke_main.dds"
 funnelEmitter.Rate = isSubvortex and 115 or (isWedge and 320 or 240)
-funnelEmitter.SpreadAngle = isWedge and Vector2.new(16, 16) or Vector2.new(8, 8)
+funnelEmitter.SpreadAngle = isWedge and Vector2.new(11, 11) or Vector2.new(8, 8)
 funnelEmitter.Color = ColorSequence.new(funnelColor)
 funnelEmitter.RotSpeed = NumberRange.new(350, 650)
-funnelEmitter.Transparency = funnelTransparency
--- Couple funnel height directly to the Cloud Height
+funnelEmitter.Transparency = normalFunnelTransparency
 applyCloudHeightToFunnel(funnelEmitter, cloudHeight, isWedge)
-if isWedge then
-funnelEmitter.Size = NumberSequence.new({
-NumberSequenceKeypoint.new(0, baseWidth),
-NumberSequenceKeypoint.new(0.35, baseWidth * 1.05),
-NumberSequenceKeypoint.new(0.75, topMaxSize * 0.95),
-NumberSequenceKeypoint.new(1, topMaxSize)
-})
-else
-funnelEmitter.Size = NumberSequence.new({
-NumberSequenceKeypoint.new(0, baseWidth),
-NumberSequenceKeypoint.new(0.5, topMaxSize * 0.45),
-NumberSequenceKeypoint.new(1, topMaxSize)
-})
-end
+funnelEmitter.Size = buildFunnelSizeSequence(baseWidth, topMaxSize, isWedge)
 local groundSwirl = Instance.new("ParticleEmitter", baseAttachment)
 groundSwirl.Texture = "rbxasset://textures/particles/smoke_main.dds"
 groundSwirl.Rate = variant == "NonCondensation" and 45 or 140
@@ -516,7 +575,6 @@ groundSwirl.Transparency = NumberSequence.new({
 NumberSequenceKeypoint.new(0, variant == "NonCondensation" and 0.65 or 0.3),
 NumberSequenceKeypoint.new(1, 1)
 })
--- RFD (Rear-Flank Downdraft) Horizontal Gust Emitter
 local rfdEmitter = Instance.new("ParticleEmitter", baseAttachment)
 rfdEmitter.Texture = "rbxasset://textures/particles/smoke_main.dds"
 rfdEmitter.Rate = 0
@@ -546,6 +604,7 @@ RfdEmitter = rfdEmitter,
 Sound = tornadoSound,
 Variant = variant,
 BaseColor = funnelColor,
+NormalFunnelTransparency = normalFunnelTransparency,
 IsWedge = isWedge,
 IsSatellite = isSatellite,
 IsSubvortex = isSubvortex,
@@ -563,6 +622,7 @@ MaxSatelliteRange = cfg.MaxSatelliteRange or 280,
 OrbitAngle = cfg.OrbitAngle or 0,
 OrbitRadius = cfg.OrbitRadius or 0,
 LifeDuration = cfg.LifeDuration or (SimulationConfig.LifecycleProgressionEnabled and 95 or nil),
+LifecycleStageName = "Mature",
 ElapsedTime = 0,
 PartsDestroyedCount = 0,
 LastSubvortexCheck = 0,
@@ -578,7 +638,10 @@ local satVariant = possibleVariants[math.random(1, #possibleVariants)]
 local satIsWedge = (satVariant == "Normal" and math.random(1, 100) <= 45)
 local scaleRatio = math.random(35, 100) / 100
 local satBaseWidth = math.min(baseWidth, math.max(8, math.floor(baseWidth * scaleRatio)))
-local satTopSize = math.min(topMaxSize, math.max(satBaseWidth + 10, math.floor(topMaxSize * scaleRatio)))
+local satTopSize = math.min(topMaxSize, math.max(satBaseWidth + 25, math.floor(topMaxSize * scaleRatio)))
+if satIsWedge and satTopSize <= satBaseWidth then
+satBaseWidth = math.max(8, math.floor(satTopSize * 0.65))
+end
 local satHeight = math.min(cloudHeight, math.max(140, math.floor(cloudHeight * math.max(0.65, scaleRatio))))
 local satSuction = math.min(suctionRange, math.max(30, math.floor(suctionRange * scaleRatio)))
 local satWind = math.min(windSpeed, math.max(70, math.floor(windSpeed * math.max(0.6, scaleRatio))))
@@ -610,11 +673,21 @@ end
 local RayParams = RaycastParams.new()
 RayParams.FilterType = Enum.RaycastFilterType.Include
 RayParams.FilterDescendantsInstances = { workspace.Terrain, workspace:FindFirstChild("Baseplate") }
+local function updateDirtTracksVisibility()
+for _, obj in ipairs(ScorchFolder:GetChildren()) do
+if obj:GetAttribute("IsDirtTrackDecal") then
+obj.Transparency = SimulationConfig.DirtTracksEnabled and 0.35 or 1
+end
+end
+end
 local function dropScorchAndBeam(tornadoObj, prevAttachment)
 local origin = tornadoObj.BasePart.Position + Vector3.new(0, 15, 0)
 local result = workspace:Raycast(origin, Vector3.new(0, -40, 0), RayParams)
 local hitPos = result and result.Position or tornadoObj.BasePart.Position
+-- Only spawn ground dirt/scouring decal if DirtTracksEnabled is ON
+if SimulationConfig.DirtTracksEnabled then
 local scorchPart = Instance.new("Part")
+scorchPart.Name = "DirtScorchTrack"
 scorchPart.Size = Vector3.new(tornadoObj.CurrentBaseWidth * 1.1, 0.15, tornadoObj.CurrentBaseWidth * 1.1)
 scorchPart.CFrame = CFrame.new(hitPos + Vector3.new(0, 0.05, 0)) * CFrame.Angles(0, math.rad(math.random(0, 360)), 0)
 scorchPart.Anchored = true
@@ -623,7 +696,10 @@ scorchPart.Material = Enum.Material.Slate
 scorchPart.Color = tornadoObj.Variant == "DustDevil" and Color3.fromRGB(130, 95, 65) or Color3.fromRGB(48, 42, 36)
 scorchPart.Transparency = 0.35
 scorchPart:SetAttribute("IsTornadoComponent", true)
+scorchPart:SetAttribute("IsDirtTrackDecal", true)
 scorchPart.Parent = ScorchFolder
+end
+-- Invisible Aerial Radar Node (preserved even when Dirt Tracks are off so Aerial Radar View still works)
 local nodePart = Instance.new("Part")
 nodePart.Size = Vector3.new(1, 1, 1)
 nodePart.Transparency = 1
@@ -666,20 +742,17 @@ elseif scale < 1 then
 AerialCameraState.ZoomHeight = math.clamp(AerialCameraState.ZoomHeight + 18, 110, 1400)
 end
 end)
--- Click-to-Steer Waypoint Placement while in Aerial Radar View
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 if gameProcessed or not SimulationConfig.AerialViewActive or not SimulationConfig.ClickToSteerEnabled then return end
 if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 local ray = Camera:ScreenPointToRay(input.Position.X, input.Position.Y)
 local hit = workspace:Raycast(ray.Origin, ray.Direction * 3000)
 local targetPos = hit and hit.Position or (ray.Origin + ray.Direction * AerialCameraState.ZoomHeight)
--- Set waypoint for master tornadoes
 for _, t in ipairs(ActiveTornadoes) do
 if not t.IsSubvortex and not t.IsSatellite then
 t.Waypoint = Vector3.new(targetPos.X, t.BasePart.Position.Y, targetPos.Z)
 end
 end
--- Visual Target Ping Marker
 local ping = Instance.new("Part")
 ping.Shape = Enum.PartType.Cylinder
 ping.Size = Vector3.new(0.4, 28, 28)
@@ -706,13 +779,17 @@ local InstantStrikeToggleVisualRefresh = nil
 local TelemetryTextLabel = nil
 local InflowArrowLabel = nil
 local function startMasterLoops()
-setupGlobalRainCanopy()
+setupPlayerAtmosphericAttachments()
 local renderConn = RunService.RenderStepped:Connect(function(dt)
 local char, root, hum = getCharacterData()
 local closestVortexDist = math.huge
 local primaryFocusTornado = ActiveTornadoes
+local playerInsideCoreWall = false
 if GlobalRainPart and root then
 GlobalRainPart.CFrame = CFrame.new(root.Position.X, root.Position.Y + 95, root.Position.Z)
+end
+if CoreInteriorPart and root then
+CoreInteriorPart.CFrame = CFrame.new(root.Position.X, root.Position.Y + 6, root.Position.Z)
 end
 -- A. Update All Active Tornadoes
 for i = #ActiveTornadoes, 1, -1 do
@@ -723,8 +800,9 @@ continue
 end
 t.ElapsedTime = t.ElapsedTime + dt
 local prevPos = t.BasePart.Position
--- Optional 4-Stage Lifecycle Evolution (Touchdown -> Mature -> Peak -> Rope-Out & Lift)
-if SimulationConfig.LifecycleProgressionEnabled and not t.IsSubvortex and t.LifeDuration then
+-- Optional 4-Stage Lifecycle Evolution
+if SimulationConfig.LifecycleProgressionEnabled and not t.IsSubvortex then
+t.LifeDuration = t.LifeDuration or 95
 local progress = math.clamp(t.ElapsedTime / t.LifeDuration, 0, 1)
 if progress >= 1 then
 t.BasePart:Destroy()
@@ -733,25 +811,30 @@ if t.DopplerRing then t.DopplerRing:Destroy() end
 table.remove(ActiveTornadoes, i)
 continue
 elseif progress < 0.2 then
--- Stage 1: Touchdown (narrower funnel building up)
+t.LifecycleStageName = "1: Touchdown"
 local factor = 0.35 + (progress / 0.2) * 0.65
 t.CurrentBaseWidth = t.TargetBaseWidth * factor
 t.CurrentTopSize = t.TargetTopSize * factor
-elseif progress < 0.75 then
--- Stage 2 & 3: Mature / Peak Wedge
+elseif progress < 0.45 then
+t.LifecycleStageName = "2: Mature"
+t.CurrentBaseWidth = t.TargetBaseWidth * 0.9
+t.CurrentTopSize = t.TargetTopSize * 0.95
+elseif progress < 0.78 then
+t.LifecycleStageName = "3: Peak Wedge"
 t.CurrentBaseWidth = t.TargetBaseWidth
 t.CurrentTopSize = t.TargetTopSize
 else
--- Stage 4: Rope-Out & Dissipation (thins out into a twisting rope)
-local ropeFactor = math.max(0.12, 1 - ((progress - 0.75) / 0.25))
+t.LifecycleStageName = "4: Rope-Out"
+local ropeFactor = math.max(0.12, 1 - ((progress - 0.78) / 0.22))
 t.CurrentBaseWidth = t.TargetBaseWidth * ropeFactor
 t.CurrentTopSize = t.TargetTopSize * math.max(0.25, ropeFactor)
 end
 else
+t.LifecycleStageName = "Active"
 t.CurrentBaseWidth = t.TargetBaseWidth
 t.CurrentTopSize = t.TargetTopSize
 end
--- Update Doppler Velocity Ring Position & Visibility
+-- Update Doppler Velocity Ring
 if t.DopplerRing and t.DopplerGui then
 t.DopplerGui.Enabled = SimulationConfig.AerialViewActive and SimulationConfig.DopplerOverlayEnabled
 local ringSize = math.max(45, t.SuctionRange * 1.4)
@@ -878,7 +961,7 @@ spawnSubvorticesFor(t)
 end
 end
 end
--- B. Sinuous Funnel Wave Physics & Barometric Breathing
+-- B. Sinuous Funnel Wave Physics & Gradual Wedge/Cone Breathing
 local swayOffset = Vector3.zero
 if t.CurrentTopSize < 200 and not t.IsSubvortex then
 local waveX = math.sin(t.ElapsedTime * 1.6) * 32 + math.cos(t.ElapsedTime * 0.9) * 14
@@ -888,19 +971,21 @@ end
 t.SkyPart.CFrame = t.BasePart.CFrame * CFrame.new(swayOffset.X, t.Height, swayOffset.Z)
 local pulse = (t.CurrentBaseWidth < 200 and not t.IsSubvortex) and (1 + (math.sin(t.ElapsedTime * 2.4) * 0.18)) or 1
 local activeBase = t.CurrentBaseWidth * pulse
-if t.IsWedge then
-t.FunnelEmitter.Size = NumberSequence.new({
-NumberSequenceKeypoint.new(0, activeBase),
-NumberSequenceKeypoint.new(0.35, activeBase * 1.05),
-NumberSequenceKeypoint.new(0.75, t.CurrentTopSize * 0.95),
-NumberSequenceKeypoint.new(1, t.CurrentTopSize)
-})
+t.FunnelEmitter.Size = buildFunnelSizeSequence(activeBase, t.CurrentTopSize, t.IsWedge)
+-- Check if Player is Inside This Tornado's Core Wall
+if root then
+local pDist = (Vector2.new(root.Position.X, root.Position.Z) - Vector2.new(t.BasePart.Position.X, t.BasePart.Position.Z)).Magnitude
+if pDist < closestVortexDist then
+closestVortexDist = pDist
+primaryFocusTornado = t
+end
+local coreRadius = math.max(16, t.CurrentBaseWidth * 0.72)
+if SimulationConfig.CorePunchImmersionEnabled and pDist <= coreRadius and not SimulationConfig.AerialViewActive then
+playerInsideCoreWall = true
+t.FunnelEmitter.Transparency = NumberSequence.new(1)
 else
-t.FunnelEmitter.Size = NumberSequence.new({
-NumberSequenceKeypoint.new(0, activeBase),
-NumberSequenceKeypoint.new(0.5, t.CurrentTopSize * 0.45),
-NumberSequenceKeypoint.new(1, t.CurrentTopSize)
-})
+t.FunnelEmitter.Transparency = t.NormalFunnelTransparency
+end
 end
 -- C. Scorch Decal & Aerial Beam Logging
 local movedDist = (t.BasePart.Position - prevPos).Magnitude
@@ -909,17 +994,18 @@ if not t.IsSubvortex and t.DistAccum >= 14 then
 t.DistAccum = 0
 t.LastBeamAttachment = dropScorchAndBeam(t, t.LastBeamAttachment)
 end
--- D. Total Workspace Destruction Scanner (With Gradual Structural Weakening Option)
+-- D. Workspace Debris & Destruction Scanner (Respects EF2 Structural Gate)
 local scanRadius = t.SuctionRange * 1.15
 local scanCenter = t.BasePart.Position + Vector3.new(0, t.Height * 0.35, 0)
 local overlapParams = OverlapParams.new()
 overlapParams.MaxParts = 70
 local nearbyParts = workspace:GetPartBoundsInRadius(scanCenter, scanRadius, overlapParams)
+local isEf2OrStronger = canBreakAnchoredStructures(t)
 for _, part in ipairs(nearbyParts) do
 if not CapturedDebris[part] and not isExcludedPart(part, t) then
 local horizDist = (Vector2.new(part.Position.X, part.Position.Z) - Vector2.new(t.BasePart.Position.X, t.BasePart.Position.Z)).Magnitude
 if horizDist <= t.SuctionRange then
--- Gradual Structural Weakening: weaker winds require multiple ticks to tear parts free
+if isEf2OrStronger then
 if SimulationConfig.GradualDestructionEnabled and t.WindSpeed < 200 then
 PartStressCounters[part] = (PartStressCounters[part] or 0) + dt
 local requiredStress = math.clamp((210 - t.WindSpeed) / 140, 0.15, 1.1)
@@ -945,19 +1031,36 @@ Angle = math.random() * math.pi * 2,
 HeightOffset = math.max(2, part.Position.Y - t.BasePart.Position.Y),
 Radius = math.max(6, horizDist)
 }
+else
+if not part.Anchored then
+recordOriginalState(part)
+part.CanCollide = false
+local mass = part:GetMass()
+if mass <= 35 then
+local tracks = { "RotateInside", "Thrown" }
+CapturedDebris[part] = {
+Part = part,
+Tornado = t,
+Behavior = tracks[math.random(1, 2)],
+Angle = math.random() * math.pi * 2,
+HeightOffset = math.max(2, part.Position.Y - t.BasePart.Position.Y),
+Radius = math.max(6, horizDist)
+}
+else
+part.CanCollide = true
+local pullDir = (t.BasePart.Position - part.Position) * Vector3.new(1, 0, 1)
+if pullDir.Magnitude > 0.1 then
+part.AssemblyLinearVelocity = (pullDir.Unit * (t.WindSpeed * 0.28)) + Vector3.new(0, 12, 0)
+part.AssemblyAngularVelocity = Vector3.new(math.random(-4, 4), math.random(-5, 5), math.random(-4, 4))
 end
 end
 end
--- E. Track Closest Distance to Player
-if root then
-local pDist = (Vector2.new(root.Position.X, root.Position.Z) - Vector2.new(t.BasePart.Position.X, t.BasePart.Position.Z)).Magnitude
-if pDist < closestVortexDist then
-closestVortexDist = pDist
-primaryFocusTornado = t
 end
 end
 end
--- F. Update Deployed Weather Probes ("Turtles") Telemetry
+end
+end
+-- E. Update Deployed Weather Probes ("Turtles") Telemetry
 for pIdx = #ActiveProbes, 1, -1 do
 local probe = ActiveProbes[pIdx]
 if not probe.Part or not probe.Part.Parent then
@@ -986,7 +1089,7 @@ probe.PeakWind,
 probe.MinPressure
 )
 end
--- G. Update Live Interceptor Telemetry HUD
+-- F. Update Live Interceptor Telemetry HUD
 if TelemetryHudRef then
 TelemetryHudRef.Visible = SimulationConfig.TelemetryHudEnabled
 if SimulationConfig.TelemetryHudEnabled and TelemetryTextLabel then
@@ -994,14 +1097,24 @@ if primaryFocusTornado and primaryFocusTornado.BasePart and root then
 local influence = math.clamp(1 - (closestVortexDist / (primaryFocusTornado.SuctionRange * 2.8)), 0, 1)
 local measuredWind = math.floor(12 + (primaryFocusTornado.WindSpeed * (influence ^ 1.25)))
 local pressureMb = math.floor(1013 - ((primaryFocusTornado.WindSpeed * 0.34) * (influence ^ 1.5)))
+if measuredWind > SessionRecords.PeakWindMph then
+SessionRecords.PeakWindMph = measuredWind
+end
+if pressureMb < SessionRecords.LowestPressureMb then
+SessionRecords.LowestPressureMb = pressureMb
+end
+local efModeTag = canBreakAnchoredStructures(primaryFocusTornado) and "EF2+ BREACH" or "SUB-EF2 LIFT"
 TelemetryTextLabel.Text = string.format(
-"📡 INTERCEPTOR TELEMETRY\nPressure: %d mb  |  Wind: %d MPH\nCore Dist: %d studs  |  Height: %d",
-pressureMb,
+"📡 TELEMETRY [%s | %s]\nWind: %d MPH (Peak %d) | %d mb (Min %d)\nCore Dist: %d studs | Stage: %s",
+playerInsideCoreWall and "IN CORE!" or "TRACKING",
+efModeTag,
 measuredWind,
+SessionRecords.PeakWindMph,
+pressureMb,
+SessionRecords.LowestPressureMb,
 math.floor(closestVortexDist),
-math.floor(primaryFocusTornado.Height)
+primaryFocusTornado.LifecycleStageName
 )
--- Rotate Inflow Arrow toward the tornado core relative to camera look vector
 if InflowArrowLabel then
 local toCore = (primaryFocusTornado.BasePart.Position - root.Position) * Vector3.new(1, 0, 1)
 local camLook = Camera.CFrame.LookVector * Vector3.new(1, 0, 1)
@@ -1013,16 +1126,19 @@ camLook.X * toCore.X + camLook.Z * toCore.Z
 InflowArrowLabel.Rotation = math.deg(angle)
 end
 end
--- Trigger Screen Mud/Crack Impact Flash when inside close core wall
-if closestVortexDist <= (primaryFocusTornado.CurrentBaseWidth * 0.85) and math.random(1, 100) <= 4 then
+if playerInsideCoreWall and math.random(1, 100) <= 6 then
 triggerScreenImpactPulse()
 end
 else
-TelemetryTextLabel.Text = "📡 INTERCEPTOR TELEMETRY\nPressure: 1013 mb  |  Wind: 8 MPH\nCore Dist: CLEAR  |  Status: STANDBY"
+TelemetryTextLabel.Text = string.format(
+"📡 INTERCEPT TELEMETRY [STANDBY]\nWind: 8 MPH (Peak %d) | 1013 mb (Min %d)\nCore Dist: CLEAR | Stage: NONE",
+SessionRecords.PeakWindMph,
+SessionRecords.LowestPressureMb
+)
 end
 end
 end
--- H. Update Triple-Track Kinetic Debris Physics
+-- G. Update Triple-Track Kinetic Debris Physics
 for part, data in pairs(CapturedDebris) do
 local t = data.Tornado
 if not part or not part.Parent or not t or not t.BasePart or not t.BasePart.Parent then
@@ -1057,8 +1173,10 @@ CapturedDebris[part] = nil
 end
 end
 end
--- I. Player Suction & Throw Physics
+-- H. Player Suction & Throw Physics (Ignored if seated inside an OceanicWX Interceptor)
 if root and hum and primaryFocusTornado and SimulationConfig.PlayerSuctionEnabled then
+local seatedInInterceptor = hum.SeatPart and isInsideExcludedGroup(hum.SeatPart)
+if not seatedInInterceptor then
 if PlayerThrowCooldown > 0 then
 PlayerThrowCooldown = PlayerThrowCooldown - dt
 elseif closestVortexDist <= primaryFocusTornado.SuctionRange or PlayerInVortex then
@@ -1088,7 +1206,8 @@ PlayerHoldTime = 0
 PlayerInVortex = false
 end
 end
--- J. Ambient Weather Shader Interpolation, Map-Wide Rain & Camera Shake
+end
+-- I. Ambient Weather, CORE-PUNCH ZERO-VISIBILITY FOG & INTENSE CAMERA SHAKE
 if #ActiveTornadoes > 0 and SimulationConfig.WeatherPipelineActive then
 local mins = Lighting:GetMinutesAfterMidnight()
 local targetFogColor = Color3.fromRGB(65, 70, 78)
@@ -1101,9 +1220,29 @@ targetFogColor = Color3.fromRGB(92, 72, 98)
 else
 targetFogColor = Color3.fromRGB(22, 25, 32)
 end
+if playerInsideCoreWall and primaryFocusTornado then
+local coreFogColor = primaryFocusTornado.Variant == "DustDevil"
+and Color3.fromRGB(165, 118, 72)
+or Color3.fromRGB(46, 48, 52)
+Lighting.FogColor = Lighting.FogColor:Lerp(coreFogColor, dt * 8)
+Lighting.Ambient = Lighting.Ambient:Lerp(coreFogColor, dt * 8)
+Lighting.FogStart = 0
+Lighting.FogEnd = 42
+if CoreInteriorDebrisEmitter then
+CoreInteriorDebrisEmitter.Color = ColorSequence.new(
+primaryFocusTornado.Variant == "DustDevil" and Color3.fromRGB(185, 130, 80) or Color3.fromRGB(85, 76, 65)
+)
+CoreInteriorDebrisEmitter.Rate = 280
+end
+else
 Lighting.FogColor = Lighting.FogColor:Lerp(targetFogColor, dt * 2)
 Lighting.Ambient = Lighting.Ambient:Lerp(targetFogColor, dt * 2)
+Lighting.FogStart = OriginalLighting.FogStart
 Lighting.FogEnd = 900
+if CoreInteriorDebrisEmitter then
+CoreInteriorDebrisEmitter.Rate = 0
+end
+end
 if GlobalRainEmitter then
 local hasRainStorm = false
 for _, t in ipairs(ActiveTornadoes) do
@@ -1119,21 +1258,33 @@ else
 GlobalRainEmitter.Rate = 0
 end
 end
-if hum and closestVortexDist < 340 and not SimulationConfig.AerialViewActive then
-local shakeMag = math.clamp(1 - (closestVortexDist / 340), 0, 1) * 1.45
+if hum and not SimulationConfig.AerialViewActive then
+if playerInsideCoreWall then
+local coreShake = 2.65
+hum.CameraOffset = Vector3.new(
+(math.random() - 0.5) * coreShake,
+(math.random() - 0.5) * coreShake,
+(math.random() - 0.5) * coreShake
+)
+elseif closestVortexDist < 340 then
+local shakeMag = math.clamp(1 - (closestVortexDist / 340), 0, 1) * 1.35
 hum.CameraOffset = Vector3.new(
 (math.random() - 0.5) * shakeMag,
 (math.random() - 0.5) * shakeMag,
 (math.random() - 0.5) * shakeMag
 )
+else
+hum.CameraOffset = Vector3.zero
+end
 elseif hum then
 hum.CameraOffset = Vector3.zero
 end
 else
 if GlobalRainEmitter then GlobalRainEmitter.Rate = 0 end
+if CoreInteriorDebrisEmitter then CoreInteriorDebrisEmitter.Rate = 0 end
 if hum then hum.CameraOffset = Vector3.zero end
 end
--- K. Interactive Aerial Tracker Camera (Joystick/WASD Panning + Q/E/Scroll/Pinch Zoom)
+-- J. Interactive Aerial Tracker Camera
 if SimulationConfig.AerialViewActive then
 Camera.CameraType = Enum.CameraType.Scriptable
 local baseAnchor = (primaryFocusTornado and primaryFocusTornado.BasePart and primaryFocusTornado.BasePart.Position)
@@ -1180,6 +1331,8 @@ table.clear(ActiveTornadoes)
 table.clear(ActiveProbes)
 table.clear(CapturedDebris)
 table.clear(PartStressCounters)
+SessionRecords.PeakWindMph = 0
+SessionRecords.LowestPressureMb = 1013
 ScorchFolder:ClearAllChildren()
 for part, state in pairs(OriginalPartStates) do
 if part and part.Parent then
@@ -1194,6 +1347,7 @@ table.clear(OriginalPartStates)
 Lighting.Ambient = OriginalLighting.Ambient
 Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
 Lighting.FogColor = OriginalLighting.FogColor
+Lighting.FogStart = OriginalLighting.FogStart
 Lighting.FogEnd = OriginalLighting.FogEnd
 Lighting.ExposureCompensation = OriginalLighting.ExposureCompensation
 SimulationConfig.AerialViewActive = false
@@ -1201,7 +1355,7 @@ AerialCameraState.PanOffset = Vector3.zero
 Camera.CameraType = Enum.CameraType.Custom
 end
 -- ============================================================================
--- 9. CROSS-PLATFORM INVENTORY TOOLS (WAND, AERIAL MAP, CONTROLS, DEPLOY PROBE)
+-- 9. CROSS-PLATFORM INVENTORY TOOLS ("Controls", "Tornado Control Wand", "Aerial Tracker Map", "Deploy Probe")
 -- ============================================================================
 local function toggleAerialView(forceState)
 if forceState ~= nil then
@@ -1248,7 +1402,20 @@ if obj:GetAttribute("StormTool") then obj:Destroy() end
 end
 end
 end
--- Tool 1: Tornado Control Wand
+-- Tool 1: Controls (Opens & Closes the Storm Controls GUI)
+local guiTool = Instance.new("Tool")
+guiTool.Name = "Controls"
+guiTool:SetAttribute("StormTool", true)
+local guiHandle = Instance.new("Part")
+guiHandle.Name = "Handle"
+guiHandle.Size = Vector3.new(1.4, 0.3, 2.0)
+guiHandle.Material = Enum.Material.SmoothPlastic
+guiHandle.Color = Color3.fromRGB(40, 50, 70)
+guiHandle.Parent = guiTool
+guiTool.Activated:Connect(function()
+toggleGuiVisibility()
+end)
+-- Tool 2: Tornado Control Wand
 local wand = Instance.new("Tool")
 wand.Name = "Tornado Control Wand"
 wand:SetAttribute("StormTool", true)
@@ -1265,7 +1432,7 @@ else
 spawnTornado()
 end
 end)
--- Tool 2: Aerial Tracker Map
+-- Tool 3: Aerial Tracker Map
 local mapTool = Instance.new("Tool")
 mapTool.Name = "Aerial Tracker Map"
 mapTool:SetAttribute("StormTool", true)
@@ -1282,20 +1449,7 @@ end)
 mapTool.Unequipped:Connect(function()
 toggleAerialView(false)
 end)
--- Tool 3: Tornado Controls
-local guiTool = Instance.new("Tool")
-guiTool.Name = "Tornado Controls"
-guiTool:SetAttribute("StormTool", true)
-local guiHandle = Instance.new("Part")
-guiHandle.Name = "Handle"
-guiHandle.Size = Vector3.new(1.4, 0.3, 2.0)
-guiHandle.Material = Enum.Material.SmoothPlastic
-guiHandle.Color = Color3.fromRGB(40, 50, 70)
-guiHandle.Parent = guiTool
-guiTool.Activated:Connect(function()
-toggleGuiVisibility()
-end)
--- Tool 4: Deploy Weather Probe
+-- Tool 4: Deploy Probe
 local probeTool = Instance.new("Tool")
 probeTool.Name = "Deploy Probe"
 probeTool:SetAttribute("StormTool", true)
@@ -1309,13 +1463,13 @@ probeHandle.Parent = probeTool
 probeTool.Activated:Connect(function()
 deployWeatherProbe()
 end)
+equipWithMobileOverride(guiTool)
 equipWithMobileOverride(wand)
 equipWithMobileOverride(mapTool)
-equipWithMobileOverride(guiTool)
 equipWithMobileOverride(probeTool)
 end
 -- ============================================================================
--- 10. CORE PANEL GUI CONTROLS, TELEMETRY HUD & PRESET DECK
+-- 10. CORE PANEL GUI CONTROLS, TELEMETRY HUD & VERSION FOOTER
 -- ============================================================================
 local function buildControlGUI()
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -1327,40 +1481,38 @@ screenGui.Name = "TornadoControlDeck"
 screenGui.ResetOnSpawn = false
 screenGui.IgnoreGuiInset = true
 screenGui.Parent = playerGui
--- Screen Impact Overlay (Mud / Rain / Debris Splatter FX)
 local impactOverlay = Instance.new("ImageLabel")
 impactOverlay.Name = "ScreenImpactOverlay"
 impactOverlay.Size = UDim2.new(1, 0, 1, 0)
 impactOverlay.BackgroundTransparency = 1
-impactOverlay.Image = "rbxassetid://241650934" -- Vignette splatter texture
+impactOverlay.Image = "rbxassetid://241650934"
 impactOverlay.ImageColor3 = Color3.fromRGB(70, 55, 42)
 impactOverlay.ImageTransparency = 1
 impactOverlay.ZIndex = 1
 impactOverlay.Parent = screenGui
 ScreenImpactOverlayRef = impactOverlay
--- Top-Right Live Interceptor Telemetry HUD
 local telemetryFrame = Instance.new("Frame")
 telemetryFrame.Name = "InterceptorTelemetryHUD"
-telemetryFrame.Size = UDim2.new(0, 290, 0, 68)
-telemetryFrame.Position = UDim2.new(1, -305, 0, 52)
+telemetryFrame.Size = UDim2.new(0, 325, 0, 72)
+telemetryFrame.Position = UDim2.new(1, -340, 0, 52)
 telemetryFrame.BackgroundColor3 = Color3.fromRGB(14, 18, 26)
 telemetryFrame.BackgroundTransparency = 0.15
 telemetryFrame.Parent = screenGui
 Instance.new("UICorner", telemetryFrame).CornerRadius = UDim.new(0, 8)
 TelemetryHudRef = telemetryFrame
 local teleLabel = Instance.new("TextLabel", telemetryFrame)
-teleLabel.Size = UDim2.new(0.78, 0, 0.9, 0)
+teleLabel.Size = UDim2.new(0.8, 0, 0.9, 0)
 teleLabel.Position = UDim2.new(0.04, 0, 0.05, 0)
 teleLabel.BackgroundTransparency = 1
 teleLabel.TextColor3 = Color3.fromRGB(0, 235, 195)
 teleLabel.Font = Enum.Font.GothamBold
 teleLabel.TextSize = 11
 teleLabel.TextXAlignment = Enum.TextXAlignment.Left
-teleLabel.Text = "📡 INTERCEPTOR TELEMETRY\nPressure: 1013 mb  |  Wind: 8 MPH\nCore Dist: CLEAR  |  Status: STANDBY"
+teleLabel.Text = "📡 INTERCEPT TELEMETRY [STANDBY]\nWind: 8 MPH (Peak 0) | 1013 mb (Min 1013)\nCore Dist: CLEAR | Stage: NONE"
 TelemetryTextLabel = teleLabel
 local arrowLbl = Instance.new("TextLabel", telemetryFrame)
 arrowLbl.Size = UDim2.new(0, 42, 0, 42)
-arrowLbl.Position = UDim2.new(0.81, 0, 0.5, -21)
+arrowLbl.Position = UDim2.new(0.83, 0, 0.5, -21)
 arrowLbl.BackgroundColor3 = Color3.fromRGB(25, 32, 44)
 arrowLbl.TextColor3 = Color3.fromRGB(255, 195, 0)
 arrowLbl.Font = Enum.Font.GothamBold
@@ -1369,7 +1521,6 @@ arrowLbl.Text = "⬆️"
 arrowLbl.Parent = telemetryFrame
 Instance.new("UICorner", arrowLbl).CornerRadius = UDim.new(1, 0)
 InflowArrowLabel = arrowLbl
--- Toggle Collapse Button
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Size = UDim2.new(0, 150, 0, 34)
 toggleBtn.Position = UDim2.new(0, 14, 0.5, -230)
@@ -1381,12 +1532,12 @@ toggleBtn.Text = "🌪️ STORM CONTROLS"
 toggleBtn.Parent = screenGui
 Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 6)
 local mainFrame = Instance.new("ScrollingFrame")
-mainFrame.Size = UDim2.new(0, 275, 0, 420)
+mainFrame.Size = UDim2.new(0, 278, 0, 420)
 mainFrame.Position = UDim2.new(0, 14, 0.5, -190)
 mainFrame.BackgroundColor3 = Color3.fromRGB(16, 20, 28)
 mainFrame.BackgroundTransparency = 0.1
 mainFrame.BorderSizePixel = 0
-mainFrame.CanvasSize = UDim2.new(0, 0, 0, 1480)
+mainFrame.CanvasSize = UDim2.new(0, 0, 0, 1600)
 mainFrame.ScrollBarThickness = 5
 mainFrame.Parent = screenGui
 Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
@@ -1396,7 +1547,7 @@ layout.Padding = UDim.new(0, 6)
 layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 local padding = Instance.new("UIPadding", mainFrame)
 padding.PaddingTop = UDim.new(0, 8)
-padding.PaddingBottom = UDim.new(0, 8)
+padding.PaddingBottom = UDim.new(0, 10)
 toggleBtn.MouseButton1Click:Connect(function()
 toggleGuiVisibility()
 end)
@@ -1442,7 +1593,6 @@ box.FocusLost:Connect(function()
 local num = tonumber(box.Text)
 if num then
 SimulationConfig[configKey] = num
--- Dynamically adjust active tornadoes' funnel height if Cloud Height is changed
 if configKey == "Height" then
 for _, t in ipairs(ActiveTornadoes) do
 if not t.IsSubvortex then
@@ -1560,15 +1710,19 @@ addHeader("🎯 INTERCEPT & RADAR OPTIONS")
 addToggleButton("Player Suction", "PlayerSuctionEnabled")
 addToggleButton("Track Player Mode", "TrackPlayerMode")
 InstantStrikeToggleVisualRefresh = addToggleButton("Instant Strike Intercept", "InstantStrikeIntercept")
+addToggleButton("Core-Punch Zero-Vis & Shake", "CorePunchImmersionEnabled")
 addToggleButton("Companion Satellite", "SatelliteTornadoEnabled")
 addToggleButton("Aerial Radar View", "AerialViewActive", function(state)
 toggleAerialView(state)
 end)
 addToggleButton("Doppler Velocity Ring", "DopplerOverlayEnabled")
 addToggleButton("Aerial Click-to-Steer", "ClickToSteerEnabled")
-addHeader("📡 TELEMETRY & REALISM OPTIONS")
+addHeader("📡 TELEMETRY & LIFECYCLE OPTIONS")
 addToggleButton("Interceptor Telemetry HUD", "TelemetryHudEnabled")
 addToggleButton("4-Stage Lifecycle Evolution", "LifecycleProgressionEnabled")
+addToggleButton("Dirt Tracks & Scouring", "DirtTracksEnabled", function()
+updateDirtTracksVisibility()
+end)
 addToggleButton("Debris Ball & RFD Gusts", "DebrisBallAndRfdEnabled")
 addToggleButton("Gradual Structural Damage", "GradualDestructionEnabled")
 addToggleButton("Storm Warning Sirens", "StormSirensEnabled")
@@ -1608,6 +1762,16 @@ addHeader("🎯 INTERCEPTED TORNADOES")
 for _, preset in ipairs(InterceptedTornadoes) do
 createPresetButton(preset, Color3.fromRGB(48, 34, 58))
 end
+-- Version Footer at the Bottom of the Scrolling Deck
+local versionLabel = Instance.new("TextLabel")
+versionLabel.Size = UDim2.new(0.92, 0, 0, 28)
+versionLabel.BackgroundColor3 = Color3.fromRGB(22, 26, 36)
+versionLabel.TextColor3 = Color3.fromRGB(140, 175, 210)
+versionLabel.Font = Enum.Font.GothamBold
+versionLabel.TextSize = 11
+versionLabel.Text = SCRIPT_VERSION
+versionLabel.Parent = mainFrame
+Instance.new("UICorner", versionLabel).CornerRadius = UDim.new(0, 5)
 end
 -- ============================================================================
 -- INITIALIZE SUITE
@@ -1617,7 +1781,7 @@ grantCrossPlatformTools()
 buildControlGUI()
 LocalPlayer.CharacterAdded:Connect(function()
 task.wait(0.5)
-setupGlobalRainCanopy()
+setupPlayerAtmosphericAttachments()
 grantCrossPlatformTools()
 end)
-print("✅ Complete Tornado & Storm Simulation Suite V6 Loaded!")
+print("✅ " .. SCRIPT_VERSION .. " Loaded Successfully!")
