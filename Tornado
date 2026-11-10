@@ -1,22 +1,48 @@
-local T = _G.TornadoSystem
+-- Unified Atmospheric Storm Simulation Engine (Protomanly Edition)
+-- Safe to execute as one complete script block on advanced Roblox Executors
 
-T.HistoricalPresets = {
-    ["El Reno 2011"] =   { Width = 45,  MaxSize = 400, Speed = 14, Height = 700, Suction = 25, WindSpeed = 210 },
-    ["El Reno 2013"] =   { Width = 110, MaxSize = 1050,Speed = 16, Height = 800, Suction = 40, WindSpeed = 296 },
-    ["Joplin"] =         { Width = 50,  MaxSize = 480, Speed = 8,  Height = 720, Suction = 30, WindSpeed = 200 },
-    ["Bridge Creek"] =   { Width = 40,  MaxSize = 380, Speed = 12, Height = 680, Suction = 28, WindSpeed = 301 },
-    ["Moore"] =          { Width = 42,  MaxSize = 420, Speed = 10, Height = 400, Suction = 29, WindSpeed = 210 },
-    ["Jarell"] =         { Width = 25,  MaxSize = 250, Speed = 4,  Height = 650, Suction = 35, WindSpeed = 250 },
-    ["Spalding"] =       { Width = 55,  MaxSize = 550, Speed = 11, Height = 740, Suction = 32, WindSpeed = 200 },
-    ["Aurora"] =         { Width = 48,  MaxSize = 450, Speed = 9,  Height = 700, Suction = 27, WindSpeed = 180 },
-    ["Lebanon"] =        { Width = 30,  MaxSize = 300, Speed = 13, Height = 660, Suction = 22, WindSpeed = 150 },
-    ["Greensburg"] =     { Width = 65,  MaxSize = 600, Speed = 9,  Height = 750, Suction = 33, WindSpeed = 205 },
-    ["Hallam"] =         { Width = 90,  MaxSize = 920, Speed = 12, Height = 780, Suction = 38, WindSpeed = 165 }
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local RootPart = Character:WaitForChild("HumanoidRootPart")
+local Humanoid = Character:WaitForChild("Humanoid")
+
+local UI_TargetContainer = (syn and syn.protect_gui and CoreGui) or run_on_actor and CoreGui or CoreGui:FindFirstChild("RobloxGui") or PlayerGui
+local SOUND_ID = "rbxassetid://123731555496199"
+local SCORCH_DECAL = "rbxassetid://124510831869979"
+
+local CurrentTornado, CurrentRenderConnection, CurrentActiveSubvortices, CurrentSatelliteTornado, DebrisFolder, ScorchFolder, CurrentBaseAnchor = nil, nil, {}, nil, nil, nil, nil
+local MapBackup, PathPoints, MapCameraConnection, SimulatedDebrisList = {}, {}, nil, {}
+local TrackingActive = false
+
+local GlobalConfig = {
+    MovementMode = "Random", PlayerSuction = true, SpawnDistance = 150,
+    InterceptTargetOnce = false, SatelliteEnabled = false, Width = 12,
+    Speed = 8, MaxSize = 200, Height = 650, WindSpeed = 120, Type = "Normal"
 }
-local T = _G.TornadoSystem
 
-T.ResetMap = function()
-    for _, b in ipairs(T.MapBackup) do
+local HistoricalPresets = {
+    ["El Reno 2011"] =   { Width = 45,  MaxSize = 400, Speed = 14, Height = 700, Suction = 25, WindSpeed = 210, Type = "Normal" },
+    ["El Reno 2013"] =   { Width = 110, MaxSize = 1050,Speed = 16, Height = 800, Suction = 40, WindSpeed = 296, Type = "Normal" },
+    ["Joplin"] =         { Width = 50,  MaxSize = 480, Speed = 8,  Height = 720, Suction = 30, WindSpeed = 200, Type = "Normal" },
+    ["Bridge Creek"] =   { Width = 40,  MaxSize = 380, Speed = 12, Height = 680, Suction = 28, WindSpeed = 301, Type = "Normal" },
+    ["Moore"] =          { Width = 42,  MaxSize = 420, Speed = 10, Height = 400, Suction = 29, WindSpeed = 210, Type = "Normal" },
+    ["Jarell"] =         { Width = 25,  MaxSize = 250, Speed = 4,  Height = 650, Suction = 35, WindSpeed = 250, Type = "Normal" },
+    ["Spalding"] =       { Width = 55,  MaxSize = 550, Speed = 11, Height = 740, Suction = 32, WindSpeed = 200, Type = "Normal" },
+    ["Aurora"] =         { Width = 48,  MaxSize = 450, Speed = 9,  Height = 700, Suction = 27, WindSpeed = 180, Type = "Normal" },
+    ["Lebanon"] =        { Width = 30,  MaxSize = 300, Speed = 13, Height = 660, Suction = 22, WindSpeed = 150, Type = "Normal" },
+    ["Greensburg"] =     { Width = 65,  MaxSize = 600, Speed = 9,  Height = 750, Suction = 33, WindSpeed = 205, Type = "Normal" },
+    ["Hallam"] =         { Width = 90,  MaxSize = 920, Speed = 12, Height = 780, Suction = 38, WindSpeed = 165, Type = "Normal" }
+}
+
+local function ResetMap()
+    for _, b in pairs(MapBackup) do
         if b.Object and b.Object.Parent then
             b.Object.CFrame, b.Object.Anchored, b.Object.CanCollide = b.CFrame, b.Anchored, b.CanCollide
             b.Object.AssemblyLinearVelocity, b.Object.AssemblyAngularVelocity = Vector3.new(0,0,0), Vector3.new(0,0,0)
@@ -25,374 +51,368 @@ T.ResetMap = function()
     end
 end
 
-T.ClearScorches = function()
-    if T.ScorchFolder then T.ScorchFolder:Destroy() T.ScorchFolder = nil end
-    for _, p in ipairs(T.PathPoints) do if p.Beam then p.Beam:Destroy() end end
-    T.PathPoints = {}
+local function ClearScorches()
+    if ScorchFolder then ScorchFolder:Destroy() ScorchFolder = nil end
+    for _, p in ipairs(PathPoints) do if p.Beam then p.Beam:Destroy() end end
+    PathPoints = {}
 end
 
-T.ClearActiveTornado = function()
-    if T.CurrentRenderConnection then T.CurrentRenderConnection:Disconnect() T.CurrentRenderConnection = nil end
-    if T.CurrentTornado then T.CurrentTornado:Destroy() T.CurrentTornado = nil end
-    T.CurrentActiveSubvortices = {}
-    if T.CurrentSatelliteTornado then T.CurrentSatelliteTornado:Destroy() T.CurrentSatelliteTornado = nil end
-    if T.DebrisFolder then T.DebrisFolder:Destroy() T.DebrisFolder = nil end
-    if T.Humanoid then T.Humanoid.CameraOffset = Vector3.new(0,0,0) end
+local function ClearActiveTornado()
+    if CurrentRenderConnection then CurrentRenderConnection:Disconnect() CurrentRenderConnection = nil end
+    if CurrentTornado then CurrentTornado:Destroy() CurrentTornado = nil end
+    CurrentActiveSubvortices = {}
+    if CurrentSatelliteTornado then CurrentSatelliteTornado:Destroy() CurrentSatelliteTornado = nil end
+    if DebrisFolder then DebrisFolder:Destroy() DebrisFolder = nil end
+    if Humanoid then Humanoid.CameraOffset = Vector3.new(0,0,0) end
 end
-local T = _G.TornadoSystem
 
-T.CheckAndSuckUnanchoredParts = function(cfg)
-    local regionSize = Vector3.new(cfg.MaxSize + 150, cfg.Height, cfg.MaxSize + 150)
-    local region = Region3.new(T.CurrentBaseAnchor.Position - regionSize/2, T.CurrentBaseAnchor.Position + regionSize/2)
-    local parts = workspace:FindPartsInRegion3WithIgnoreList(region, {T.CurrentTornado, T.Character, T.ScorchFolder}, 200)
+local function CheckAndSuckUnanchoredParts(cfg)
+    if not CurrentBaseAnchor or not CurrentBaseAnchor.Parent then return end
+    local radiusToCheck = (cfg.MaxSize * 0.5) + 80
+    local parts = workspace:GetPartBoundsInRadius(CurrentBaseAnchor.Position, radiusToCheck)
     
-    local lowestPointY = T.RootPart.Position.Y - 3
-    local characterFlatPos = Vector3.new(T.RootPart.Position.X, 0, T.RootPart.Position.Z)
+    local lowestPointY = RootPart.Position.Y - 3
+    local characterFlatPos = Vector3.new(RootPart.Position.X, 0, RootPart.Position.Z)
 
     for _, part in ipairs(parts) do
         if part:IsA("BasePart") and not part:GetAttribute("CapturedByVortex") then
             local pName = part.Name
-            if pName ~= "Baseplate" and pName ~= "SpawnedStormInterceptor" and pName ~= "SpawnedStormInterceptor2" and pName ~= "Delta_VehicleInstance" and not part.Parent:FindFirstChildOfClass("Humanoid") then
+            if pName ~= "Baseplate" and pName ~= "SpawnedStormInterceptor" and pName ~= "SpawnedStormInterceptor2" and pName ~= "Delta_VehicleInstance" and pName ~= "DeltaVehicle_Instance" and not part:IsDescendantOf(Character) and not part:IsDescendantOf(CurrentTornado) and pName ~= "SimulationBase" and pName ~= "MesoStormCloud" and pName ~= "Tornado_Scorches" and not part:IsDescendantOf(ScorchFolder) then
                 local pPos = part.Position
                 local partFlatPos = Vector3.new(pPos.X, 0, pPos.Z)
                 local horizontalDistanceToPlayer = (partFlatPos - characterFlatPos).Magnitude
                 local directlyUnderFeet = (horizontalDistanceToPlayer < 2.5) and (pPos.Y <= lowestPointY + 0.1)
 
                 if pPos.Y > lowestPointY and not directlyUnderFeet then
-                    local dist = (Vector3.new(pPos.X, 0, pPos.Z) - Vector3.new(T.CurrentBaseAnchor.Position.X, 0, T.CurrentBaseAnchor.Position.Z)).Magnitude
-                    if dist < (cfg.MaxSize * 0.5) + 50 then
-                        if not T.MapBackup[part] then T.MapBackup[part] = { Object = part, CFrame = part.CFrame, Anchored = part.Anchored, CanCollide = part.CanCollide } end
-                        part.Anchored, part.CanCollide = false, false part:SetAttribute("CapturedByVortex", true)
-                        local behaviorChance = math.random(1, 100)
-                        local assignedBehavior = (behaviorChance <= 25 and "Thrown") or (behaviorChance <= 50 and "KeptInFunnel") or "RotateInside"
-                        table.insert(T.SimulatedDebrisList, {
-                            Instance = part, Behavior = assignedBehavior, Angle = math.atan2(pPos.Z - T.CurrentBaseAnchor.Position.Z, pPos.X - T.CurrentBaseAnchor.Position.X),
-                            HeightOffset = math.clamp(pPos.Y - T.CurrentBaseAnchor.Position.Y, 5, 250), Radius = dist, UpwardLiftSpeed = math.random(8, 20), FallbackTimer = 0
-                        })
+                    if part.Parent and part.Parent:IsA("Model") then
+                        part.Parent:BreakJoints()
                     end
+                    part:BreakJoints()
+                    
+                    if not MapBackup[part] then 
+                        MapBackup[part] = { Object = part, CFrame = part.CFrame, Anchored = part.Anchored, CanCollide = part.CanCollide } 
+                    end
+                    
+                    part.Anchored = false
+                    part.CanCollide = false
+                    part:SetAttribute("CapturedByVortex", true)
+                    
+                    local behaviorChance = math.random(1, 100)
+                    local assignedBehavior = (behaviorChance <= 25 and "Thrown") or (behaviorChance <= 50 and "KeptInFunnel") or "RotateInside"
+                    table.insert(SimulatedDebrisList, {
+                        Instance = part, Behavior = assignedBehavior, Angle = math.atan2(pPos.Z - CurrentBaseAnchor.Position.Z, pPos.X - CurrentBaseAnchor.Position.X),
+                        HeightOffset = math.clamp(pPos.Y - CurrentBaseAnchor.Position.Y, 5, 250), Radius = (partFlatPos - Vector3.new(CurrentBaseAnchor.Position.X, 0, CurrentBaseAnchor.Position.Z)).Magnitude, UpwardLiftSpeed = math.random(8, 20), FallbackTimer = 0
+                    })
                 end
             end
         end
     end
 end
-local T = _G.TornadoSystem
 
-T.SpawnTornadoSimulation = function(overrideConfig)
-    T.ClearActiveTornado()
-    local cfg = overrideConfig or T.GlobalConfig
-    local mainFolder = Instance.new("Folder") mainFolder.Name = "AtmosphericSimulation_Core" mainFolder.Parent = workspace T.CurrentTornado = mainFolder
-    T.DebrisFolder = Instance.new("Folder") T.DebrisFolder.Name = "Tornado_Captured_Debris" T.DebrisFolder.Parent = mainFolder
-    if not T.ScorchFolder then T.ScorchFolder = Instance.new("Folder", workspace) T.ScorchFolder.Name = "Tornado_Scorches" end
-    local hasInterceptedPlayer = false
-
-    local spawnCFrame = T.RootPart.CFrame * CFrame.new(0, 0, -cfg.SpawnDistance)
-    local baseAnchor = Instance.new("Part") baseAnchor.Name = "SimulationBase" baseAnchor.Size = Vector3.new(10, 1, 10)
-    local groundY = spawnCFrame.Position.Y
-    local raycastResult = workspace:Raycast(spawnCFrame.Position, Vector3.new(0, -500, 0))
-    if raycastResult then groundY = raycastResult.Position.Y end
-    baseAnchor.CFrame = CFrame.new(spawnCFrame.Position.X, groundY, spawnCFrame.Position.Z)
-    baseAnchor.Anchored, baseAnchor.CanCollide, baseAnchor.Transparency, baseAnchor.Parent = true, false, 1, mainFolder
-    T.CurrentBaseAnchor = baseAnchor
-
-    local stormCloud = Instance.new("Part") stormCloud.Name = "MesoStormCloud" stormCloud.Size = Vector3.new(5, 5, 5)
-    stormCloud.Anchored, stormCloud.CanCollide, stormCloud.Transparency = true, false, 1
-    stormCloud.CFrame = baseAnchor.CFrame * CFrame.new(0, cfg.Height, 0) stormCloud.Parent = mainFolder
-
-    local cloudAttach = Instance.new("Attachment", stormCloud)
-    local cloudEmitter = Instance.new("ParticleEmitter", cloudAttach)
-    cloudEmitter.Texture, cloudEmitter.Rate, cloudEmitter.Lifetime, cloudEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", 180, NumberRange.new(8, 12), NumberRange.new(20, 45)
-    cloudEmitter.SpreadAngle, cloudEmitter.Color = Vector2.new(180, 180), ColorSequence.new(Color3.fromRGB(45, 45, 55))
-    cloudEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 80), NumberSequenceKeypoint.new(0.5, 250), NumberSequenceKeypoint.new(1, 350)})
-    cloudEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.4), NumberSequenceKeypoint.new(1, 1)})
-
-    local windInflowEmitter = Instance.new("ParticleEmitter", baseAnchor)
-    windInflowEmitter.Texture, windInflowEmitter.Rate, windInflowEmitter.Lifetime, windInflowEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", 60, NumberRange.new(2, 4), NumberRange.new(-90, -40)
-    windInflowEmitter.SpreadAngle, windInflowEmitter.Color = Vector2.new(360, 360), ColorSequence.new(Color3.fromRGB(130, 130, 140))
-    windInflowEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 15), NumberSequenceKeypoint.new(1, 2)})
-    windInflowEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.8), NumberSequenceKeypoint.new(0.8, 0.2), NumberSequenceKeypoint.new(1, 1)})
-
-    local funnelAttach = Instance.new("Attachment", baseAnchor)
-    local funnelEmitter = Instance.new("ParticleEmitter", funnelAttach)
-    funnelEmitter.Texture, funnelEmitter.Rate, funnelEmitter.Lifetime, funnelEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", 260, NumberRange.new(5, 8), NumberRange.new(50, 85)
-    funnelEmitter.Acceleration, funnelEmitter.SpreadAngle, funnelEmitter.Color, funnelEmitter.RotSpeed = Vector3.new(0, 25, 0), Vector2.new(8, 8), ColorSequence.new(Color3.fromRGB(110, 110, 115)), NumberRange.new(350, 700)
-    local currentDescentScale = 0 funnelEmitter.Size = NumberSequence.new(0)
-
-    local debrisFieldEmitter = Instance.new("ParticleEmitter", funnelAttach)
-    debrisFieldEmitter.Texture, debrisFieldEmitter.Rate, debrisFieldEmitter.Lifetime, debrisFieldEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", 150, NumberRange.new(2, 4), NumberRange.new(25, 60)
-    debrisFieldEmitter.SpreadAngle, debrisFieldEmitter.Color = Vector2.new(360, 45), ColorSequence.new(Color3.fromRGB(115, 100, 85))
-    debrisFieldEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, cfg.Width * 1.5), NumberSequenceKeypoint.new(1, cfg.Width * 3.5)})
-    debrisFieldEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(1, 1)})
-
-    local globalRainAttach = Instance.new("Attachment", T.RootPart)
-    local globalRainEmitter = Instance.new("ParticleEmitter", globalRainAttach)
-    globalRainEmitter.Texture, globalRainEmitter.Rate, globalRainEmitter.Lifetime, globalRainEmitter.Speed = "rbxasset://textures/particles/rain.dds", 350, NumberRange.new(1, 2), NumberRange.new(80, 140)
-    globalRainEmitter.Acceleration, globalRainEmitter.EmissionDirection = Vector3.new(-30, -50, -10), Enum.EmissionDirection.Bottom
-    globalRainEmitter.Size, globalRainEmitter.Transparency = NumberSequence.new(2), NumberSequence.new({NumberSequenceKeypoint.new(0, 0.4), NumberSequenceKeypoint.new(1, 1)})
-
-    local sound = Instance.new("Sound", baseAnchor) sound.SoundId, sound.Volume, sound.Looped, sound.RollOffMaxDistance, sound.Parent = T.SOUND_ID, 3, true, 1200, baseAnchor sound:Play()
-    local function GetNewRandomWaypoint() return Vector3.new(baseAnchor.Position.X + math.random(-500, 500), baseAnchor.Position.Y, baseAnchor.Position.Z + math.random(-500, 500)) end
-    local currentTargetWaypoint = GetNewRandomWaypoint()
-
-    if cfg.SatelliteEnabled then
-        local satFolder = Instance.new("Folder") satFolder.Name = "Satellite_Companion" satFolder.Parent = mainFolder T.CurrentSatelliteTornado = satFolder
-        local satBase = Instance.new("Part") satBase.Size, satBase.Transparency, satBase.Anchored, satBase.CanCollide, satBase.Parent = Vector3.new(4,1,4), 1, true, false, satFolder
-        local satAttach = Instance.new("Attachment", satBase)
-        local satEmitter = Instance.new("ParticleEmitter", satAttach)
-        satEmitter.Texture, satEmitter.Rate, satEmitter.Lifetime, satEmitter.Speed, satEmitter.Acceleration, satEmitter.Color = "rbxasset://textures/particles/smoke_main.dds", 120, NumberRange.new(4, 6), NumberRange.new(40, 70), Vector3.new(0, 20, 0), ColorSequence.new(Color3.fromRGB(120, 120, 130))
-        satEmitter.Size, satEmitter.RotSpeed = NumberSequence.new({NumberSequenceKeypoint.new(0, cfg.Width * 0.3), NumberSequenceKeypoint.new(1, cfg.MaxSize * 0.3)}), NumberRange.new(400, 800)
+local function ExecuteRenderSubLoop(dt, baseAnchor, cfg, runtimeTicker, velocityMagnitude, angularPlayerOrbit)
+    for idx = #CurrentActiveSubvortices, 1, -1 do
+        local sub = CurrentActiveSubvortices[idx]
+        if (runtimeTicker - sub.SpawnTime) > sub.Duration or not sub.Part.Parent then sub.Part:Destroy() table.remove(CurrentActiveSubvortices, idx) else
+            sub.OffsetAngle = sub.OffsetAngle + (2.5 * dt)
+            sub.Part.CFrame = CFrame.new(baseAnchor.Position.X + math.cos(sub.OffsetAngle) * (cfg.Width + math.sin(runtimeTicker) * 15), baseAnchor.Position.Y, baseAnchor.Position.Z + math.sin(sub.OffsetAngle) * (cfg.Width + math.sin(runtimeTicker) * 15))
+        end
     end
 
-    T.SimulatedDebrisList = {}
-    local runtimeTicker, angularPlayerOrbit, lastPathTime = 0, 0, 0
-    T.CoreRenderPhysicsLoop(cfg, baseAnchor, funnelEmitter, stormCloud, hasInterceptedPlayer, currentTargetWaypoint, GetNewRandomWaypoint, lastPathTime, currentDescentScale, runtimeTicker, angularPlayerOrbit, globalRainEmitter)
+    if math.random(1, 5) == 1 then CheckAndSuckUnanchoredParts(cfg) end
+
+    for idx = #SimulatedDebrisList, 1, -1 do
+        local deb = SimulatedDebrisList[idx]
+        if not deb.Instance or not deb.Instance.Parent then table.remove(SimulatedDebrisList, idx) else
+            local pPart = deb.Instance local dPos = pPart.Position local flatCorePos = Vector3.new(baseAnchor.Position.X, 0, baseAnchor.Position.Z) local flatPartPos = Vector3.new(dPos.X, 0, dPos.Z) local currentDist = (flatPartPos - flatCorePos).Magnitude local suctionThreshold = (cfg.MaxSize * 0.5) + 60
+            if currentDist > suctionThreshold or deb.Behavior == "Released" then
+                deb.Behavior, deb.FallbackTimer = "Released", deb.FallbackTimer + dt if deb.FallbackTimer > 4 then pPart:SetAttribute("CapturedByVortex", nil) table.remove(SimulatedDebrisList, idx) end
+            else
+                if deb.Behavior == "RotateInside" then local radialTarget = math.clamp(currentDist - (20 * dt), cfg.Width + 5, suctionThreshold) deb.Angle = deb.Angle + ((velocityMagnitude / math.max(currentDist, 10)) * dt) deb.HeightOffset = math.clamp(deb.HeightOffset + (deb.UpwardLiftSpeed * dt), 5, cfg.Height - 50) pPart.AssemblyLinearVelocity = (Vector3.new(baseAnchor.Position.X + math.cos(deb.Angle) * radialTarget, baseAnchor.Position.Y + deb.HeightOffset, baseAnchor.Position.Z + math.sin(deb.Angle) * radialTarget) - dPos) * 6 pPart.AssemblyAngularVelocity = Vector3.new(math.sin(runtimeTicker), math.cos(runtimeTicker), math.sin(runtimeTicker)) * 2
+                elseif deb.Behavior == "KeptInFunnel" then deb.Angle = deb.Angle + ((velocityMagnitude * 1.4 / math.max(currentDist, 5)) * dt) deb.HeightOffset = math.clamp(deb.HeightOffset + ((deb.UpwardLiftSpeed * 0.3) * dt), 5, 200) pPart.AssemblyLinearVelocity = (Vector3.new(baseAnchor.Position.X + math.cos(deb.Angle) * (cfg.Width * 0.8), baseAnchor.Position.Y + deb.HeightOffset, baseAnchor.Position.Z + math.sin(deb.Angle) * (cfg.Width * 0.8)) - dPos) * 8 pPart.AssemblyAngularVelocity = Vector3.new(0, 4, 0)
+                elseif deb.Behavior == "Thrown" then deb.Angle = deb.Angle + ((velocityMagnitude * 0.8 / math.max(currentDist, 10)) * dt) deb.HeightOffset = deb.HeightOffset + (deb.UpwardLiftSpeed * 1.2 * dt) local dynamicScatterRadius = currentDist + (45 * dt)
+if dynamicScatterRadius > (cfg.MaxSize * 0.45) or deb.HeightOffset > 300 then local tangentVelocity = (flatPartPos - flatCorePos).Unit local dynamicReleaseVector = (Vector3.new(-tangentVelocity.Z, 0, tangentVelocity.X) * 0.75 + tangentVelocity * 0.5).Unit pPart.AssemblyLinearVelocity = (dynamicReleaseVector * (cfg.WindSpeed * 0.95)) + Vector3.new(0, math.random(40, 90), 0) deb.Behavior, deb.FallbackTimer = "Released", 0
+else pPart.AssemblyLinearVelocity = (Vector3.new(baseAnchor.Position.X + math.cos(deb.Angle) * dynamicScatterRadius, baseAnchor.Position.Y + deb.HeightOffset, baseAnchor.Position.Z + math.sin(deb.Angle) * dynamicScatterRadius) - dPos) * 5 end
 end
-local T = _G.TornadoSystem
-
-T.ExecuteRenderSubLoop = function(dt, baseAnchor, cfg, runtimeTicker, velocityMagnitude, angularPlayerOrbit)
-        for idx = #T.CurrentActiveSubvortices, 1, -1 do
-            local sub = T.CurrentActiveSubvortices[idx]
-            if (runtimeTicker - sub.SpawnTime) > sub.Duration or not sub.Part.Parent then sub.Part:Destroy() table.remove(T.CurrentActiveSubvortices, idx) else
-                sub.OffsetAngle = sub.OffsetAngle + (2.5 * dt)
-                sub.Part.CFrame = CFrame.new(baseAnchor.Position.X + math.cos(sub.OffsetAngle) * (cfg.Width + math.sin(runtimeTicker) * 15), baseAnchor.Position.Y, baseAnchor.Position.Z + math.sin(sub.OffsetAngle) * (cfg.Width + math.sin(runtimeTicker) * 15))
-            end
-        end
-
-        if math.random(1, 5) == 1 then T.CheckAndSuckUnanchoredParts(cfg) end
-
-        for idx = #T.SimulatedDebrisList, 1, -1 do
-            local deb = T.SimulatedDebrisList[idx]
-            if not deb.Instance or not deb.Instance.Parent then table.remove(T.SimulatedDebrisList, idx) else
-                local pPart = deb.Instance local dPos = pPart.Position local flatCorePos = Vector3.new(baseAnchor.Position.X, 0, baseAnchor.Position.Z) local flatPartPos = Vector3.new(dPos.X, 0, dPos.Z) local currentDist = (flatPartPos - flatCorePos).Magnitude local suctionThreshold = (cfg.MaxSize * 0.5) + 60
-                if currentDist > suctionThreshold or deb.Behavior == "Released" then
-                    deb.Behavior, deb.FallbackTimer = "Released", deb.FallbackTimer + dt if deb.FallbackTimer > 4 then pPart:SetAttribute("CapturedByVortex", nil) table.remove(T.SimulatedDebrisList, idx) end
-                else
-                    if deb.Behavior == "RotateInside" then local radialTarget = math.clamp(currentDist - (20 * dt), cfg.Width + 5, suctionThreshold) deb.Angle = deb.Angle + ((velocityMagnitude / math.max(currentDist, 10)) * dt) deb.HeightOffset = math.clamp(deb.HeightOffset + (deb.UpwardLiftSpeed * dt), 5, cfg.Height - 50) pPart.AssemblyLinearVelocity = (Vector3.new(baseAnchor.Position.X + math.cos(deb.Angle) * radialTarget, baseAnchor.Position.Y + deb.HeightOffset, baseAnchor.Position.Z + math.sin(deb.Angle) * radialTarget) - dPos) * 6 pPart.AssemblyAngularVelocity = Vector3.new(math.sin(runtimeTicker), math.cos(runtimeTicker), math.sin(runtimeTicker)) * 2
-                    elseif deb.Behavior == "KeptInFunnel" then deb.Angle = deb.Angle + ((velocityMagnitude * 1.4 / math.max(currentDist, 5)) * dt) deb.HeightOffset = math.clamp(deb.HeightOffset + ((deb.UpwardLiftSpeed * 0.3) * dt), 5, 200) pPart.AssemblyLinearVelocity = (Vector3.new(baseAnchor.Position.X + math.cos(deb.Angle) * (cfg.Width * 0.8), baseAnchor.Position.Y + deb.HeightOffset, baseAnchor.Position.Z + math.sin(deb.Angle) * (cfg.Width * 0.8)) - dPos) * 8 pPart.AssemblyAngularVelocity = Vector3.new(0, 4, 0)
-                    elseif deb.Behavior == "Thrown" then deb.Angle = deb.Angle + ((velocityMagnitude * 0.8 / math.max(currentDist, 10)) * dt) deb.HeightOffset = deb.HeightOffset + (deb.UpwardLiftSpeed * 1.2 * dt) local dynamicScatterRadius = currentDist + (45 * dt)
-                        if dynamicScatterRadius > (cfg.MaxSize * 0.45) or deb.HeightOffset > 300 then local tangentVelocity = (flatPartPos - flatCorePos).Unit local dynamicReleaseVector = (Vector3.new(-tangentVelocity.Z, 0, tangentVelocity.X) * 0.75 + tangentVelocity * 0.5).Unit pPart.AssemblyLinearVelocity = (dynamicReleaseVector * (cfg.WindSpeed * 0.95)) + Vector3.new(0, math.random(40, 90), 0) deb.Behavior, deb.FallbackTimer = "Released", 0
-                        else pPart.AssemblyLinearVelocity = (Vector3.new(baseAnchor.Position.X + math.cos(deb.Angle) * dynamicScatterRadius, baseAnchor.Position.Y + deb.HeightOffset, baseAnchor.Position.Z + math.sin(deb.Angle) * dynamicScatterRadius) - dPos) * 5 end
-                    end
-                end
-            end
-        end
-
-        if T.Character:FindFirstChild("Humanoid") and T.RootPart then
-            local currentDistanceToCore = (Vector3.new(T.RootPart.Position.X, 0, T.RootPart.Position.Z) - Vector3.new(baseAnchor.Position.X, 0, baseAnchor.Position.Z)).Magnitude
-            local activeSuctionLimit = (cfg.MaxSize * 0.5) + 30 local coreThreshold = cfg.Width + 10
-            if currentDistanceToCore <= activeSuctionLimit then
-                if currentDistanceToCore <= coreThreshold then
-                    if T.Humanoid then T.Humanoid.CameraOffset = Vector3.new(0,0,0) end
-                    if cfg.PlayerSuction then angularPlayerOrbit = angularPlayerOrbit + (0.5 * dt) T.RootPart.AssemblyLinearVelocity = (Vector3.new(baseAnchor.Position.X + math.cos(angularPlayerOrbit) * currentDistanceToCore, T.RootPart.Position.Y, baseAnchor.Position.Z + math.sin(angularPlayerOrbit) * currentDistanceToCore) - T.RootPart.Position) * 3 end
-                else
-                    if T.Humanoid then local intensity = math.clamp((1 - (currentDistanceToCore / activeSuctionLimit)) * 1.5, 0.1, 1.8) T.Humanoid.CameraOffset = Vector3.new(math.random(-100, 100) * 0.008 * intensity, math.random(-100, 100) * 0.008 * intensity, math.random(-100, 100) * 0.008 * intensity) end
-                    if cfg.PlayerSuction then angularPlayerOrbit = angularPlayerOrbit + ((velocityMagnitude / math.max(currentDistanceToCore, 10)) * dt)
-                        local rotX = baseAnchor.Position.X + math.cos(angularPlayerOrbit) * math.clamp(currentDistanceToCore - (12 * dt), coreThreshold + 2, activeSuctionLimit) local rotZ = baseAnchor.Position.Z + math.sin(angularPlayerOrbit) * math.clamp(currentDistanceToCore - (12 * dt), coreThreshold + 2, activeSuctionLimit)
-                        T.RootPart.AssemblyLinearVelocity = Vector3.new((rotX - T.RootPart.Position.X) * (overrideConfig and overrideConfig.Suction or 12) * 0.7, 28, (rotZ - T.RootPart.Position.Z) * (overrideConfig and overrideConfig.Suction or 12) * 0.7)
-                    end
-                end
-            elseif T.Humanoid then T.Humanoid.CameraOffset = Vector3.new(0,0,0) end
-        end
 end
-local T = _G.TornadoSystem
-
-T.GenerateVortexManipulatorTool = function()
-    local bp = T.LocalPlayer:WaitForChild("Backpack") local toolName = "Tornado Control Wand"
-    for _, t in ipairs(bp:GetChildren()) do if t.Name == toolName then t:Destroy() end end
-    if T.Character:FindFirstChild(toolName) then T.Character[toolName]:Destroy() end
-    local tool = Instance.new("Tool") tool.Name, tool.RequiresHandle = toolName, true
-    local handle = Instance.new("Part", tool) handle.Name, handle.Size, handle.Color, handle.Material = "Handle", Vector3.new(1, 4, 1), Color3.fromRGB(0, 162, 255), Enum.Material.Neon
-    tool.Activated:Connect(function() if T.CurrentTornado then T.ClearActiveTornado() else T.SpawnTornadoSimulation() end end)
-    tool.Parent = bp
 end
-
-T.GenerateAerialMapTool = function()
-    local bp = T.LocalPlayer:WaitForChild("Backpack") local toolName = "Aerial Tracker Map"
-    for _, t in ipairs(bp:GetChildren()) do if t.Name == toolName then t:Destroy() end end
-    if T.Character:FindFirstChild(toolName) then T.Character[toolName]:Destroy() end
-    local tool = Instance.new("Tool") tool.Name, tool.RequiresHandle = toolName, true
-    local handle = Instance.new("Part", tool) handle.Name, handle.Size, handle.Color, handle.Material = "Handle", Vector3.new(1.2, 1.2, 1.2), Color3.fromRGB(0, 220, 110), Enum.Material.Glass
-
-    tool.Activated:Connect(function()
-        T.TrackingActive = not T.TrackingActive local cam = workspace.CurrentCamera
-        if T.TrackingActive then cam.CameraType = Enum.CameraType.Scriptable
-            T.MapCameraConnection = T.RunService.RenderStepped:Connect(function()
-                if T.CurrentTornado and T.CurrentTornado:FindFirstChild("SimulationBase") then local bp = T.CurrentTornado.SimulationBase.Position cam.CFrame = CFrame.new(bp + Vector3.new(0, 950, 0), bp) else cam.CFrame = CFrame.new(T.RootPart.Position + Vector3.new(0, 950, 0), T.RootPart.Position) end
-            end)
-        else 
-            if T.MapCameraConnection then T.MapCameraConnection:Disconnect() T.MapCameraConnection = nil end 
-            cam.CameraType = Enum.CameraType.Custom 
-            for _, p in ipairs(T.PathPoints) do if p.Beam then p.Beam.Enabled = false end end
-        end
-    end)
-    tool.Unequipped:Connect(function() T.TrackingActive = false if T.MapCameraConnection then T.MapCameraConnection:Disconnect() T.MapCameraConnection = nil end workspace.CurrentCamera.CameraType = Enum.CameraType.Custom for _, p in ipairs(T.PathPoints) do if p.Beam then p.Beam.Enabled = false end end end)
-    tool.Parent = bp
 end
-
-T.BuildControllerScreenGui = function()
-    local guiName = "VortexSimulation_Dashboard" local original = T.UI_TargetContainer:FindFirstChild(guiName) if original then original:Destroy() end
-    local screenGui = Instance.new("ScreenGui") screenGui.Name, screenGui.ResetOnSpawn = guiName, false screenGui.Parent = T.UI_TargetContainer
-    local mainFrame = Instance.new("Frame") mainFrame.Size, mainFrame.Position, mainFrame.BackgroundColor3, mainFrame.BorderSizePixel, mainFrame.Active, mainFrame.Draggable, mainFrame.Visible, mainFrame.Parent = UDim2.new(0, 580, 0, 420), UDim2.new(0.5, -290, 0.5, -210), Color3.fromRGB(30, 30, 35), 0, true, true, true, screenGui
-    Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
-
-    local headerTitle = Instance.new("TextLabel", mainFrame) headerTitle.Size, headerTitle.BackgroundTransparency, headerTitle.Text, headerTitle.TextColor3, headerTitle.Font, headerTitle.TextSize, headerTitle.TextXAlignment = UDim2.new(1, -40, 0, 40), 1, "  🌪️ ATMOSPHERIC STORM SIMULATION CONTROLLER", Color3.fromRGB(240, 240, 255), Enum.Font.SourceSansBold, 18, Enum.TextXAlignment.Left
-    local closeBtn = Instance.new("TextButton", mainFrame) closeBtn.Size, closeBtn.Position, closeBtn.BackgroundTransparency, closeBtn.Text, closeBtn.TextColor3, closeBtn.TextSize, closeBtn.Font = UDim2.new(0, 40, 0, 40), UDim2.new(1, -40, 0, 0), 1, "✕", Color3.fromRGB(255, 90, 90), 20, Enum.Font.SourceSansBold
-    closeBtn.MouseButton1Click:Connect(function() mainFrame.Visible = false end)
-
-    local leftContainer = Instance.new("ScrollingFrame", mainFrame) leftContainer.Size, leftContainer.Position, leftContainer.BackgroundTransparency, leftContainer.CanvasSize, leftContainer.ScrollBarThickness = UDim2.new(0.6, -10, 1, -50), UDim2.new(0, 10, 0, 45), 1, UDim2.new(0, 0, 1.8, 0), 4
-    Instance.new("UIListLayout", leftContainer).Padding = UDim.new(0, 8)
-
-    local function CreateInputControl(labelText, defaultVal, callback)
-        local frame = Instance.new("Frame") frame.Size, frame.BackgroundTransparency, frame.Parent = UDim2.new(1, -10, 0, 40), 1, leftContainer
-        local lbl = Instance.new("TextLabel", frame) lbl.Size, lbl.Text, lbl.TextColor3, lbl.Font, lbl.TextSize, lbl.TextXAlignment, lbl.BackgroundTransparency = UDim2.new(0.6, 0, 1, 0), labelText, Color3.fromRGB(200,200,205), Enum.Font.SourceSans, 15, Enum.TextXAlignment.Left, 1
-        local box = Instance.new("TextBox", frame) box.Size, box.Position, box.BackgroundColor3, box.Text, box.TextColor3, box.Font, box.TextSize, box.BorderSizePixel = UDim2.new(0.4, -5, 0.8, 0), UDim2.new(0.6, 5, 0.1, 0), Color3.fromRGB(45,45,50), tostring(defaultVal), Color3.fromRGB(255,255,255), Enum.Font.SourceSans, 14, 0
-        box.FocusLost:Connect(function() local num = tonumber(box.Text) if num then callback(num) end end) Instance.new("UICorner", box).CornerRadius = UDim.new(0,4)
-    end
-
-    local function CreateToggleControl(labelText, defaultState, callback)
-        local frame = Instance.new("Frame") frame.Size, frame.BackgroundTransparency, frame.Parent = UDim2.new(1, -10, 0, 40), 1, leftContainer
-        local lbl = Instance.new("TextLabel", frame) lbl.Size, lbl.Text, lbl.TextColor3, lbl.Font, lbl.TextSize, lbl.TextXAlignment, lbl.BackgroundTransparency = UDim2.new(0.6, 0, 1, 0), labelText, Color3.fromRGB(200,200,205), Enum.Font.SourceSans, 15, Enum.TextXAlignment.Left, 1
-        local btn = Instance.new("TextButton", frame) btn.Size, btn.Position, btn.BackgroundColor3, btn.Text, btn.TextColor3, btn.Font, btn.TextSize, btn.BorderSizePixel = UDim2.new(0.4, -5, 0.8, 0), UDim2.new(0.6, 5, 0.1, 0), defaultState and Color3.fromRGB(0, 140, 100) or Color3.fromRGB(120, 40, 40), defaultState and "ENABLED" or "DISABLED", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 13, 0
-        local state = defaultState btn.MouseButton1Click:Connect(function() state = not state btn.BackgroundColor3 = state and Color3.fromRGB(0, 140, 100) or Color3.fromRGB(120, 40, 40) btn.Text = state and "ENABLED" or "DISABLED" callback(state) end) Instance.new("UICorner", btn).CornerRadius = UDim.new(0,4)
-    end
-
-    CreateInputControl("Base Size (Width):", T.GlobalConfig.Width, function(v) T.GlobalConfig.Width = v end)
-    CreateInputControl("Top Size (MaxSize):", T.GlobalConfig.MaxSize, function(v) T.GlobalConfig.MaxSize = v end)
-    CreateInputControl("Displacement Speed:", T.GlobalConfig.Speed, function(v) T.GlobalConfig.Speed = v end)
-    CreateInputControl("Spawn Distance Set:", T.GlobalConfig.SpawnDistance, function(v) T.GlobalConfig.SpawnDistance = v end)
-    CreateInputControl("Wind Speed (MPH):", T.GlobalConfig.WindSpeed, function(v) T.GlobalConfig.WindSpeed = v end)
-    CreateToggleControl("Player Suction Interaction:", T.GlobalConfig.PlayerSuction, function(s) T.GlobalConfig.PlayerSuction = s end)
-    CreateToggleControl("Satellite Tornado:", T.GlobalConfig.SatelliteEnabled, function(s) T.GlobalConfig.SatelliteEnabled = s end)
-    CreateToggleControl("Instant Strike Intercept:", T.GlobalConfig.InterceptTargetOnce, function(s) T.GlobalConfig.InterceptTargetOnce = s end)
-    CreateToggleControl("Follow Player Track Mode:", false, function(s) T.GlobalConfig.MovementMode = s and "Follow Player" or "Random" end)
-
-    local spawnBtn = Instance.new("TextButton", mainFrame) spawnBtn.Size, spawnBtn.Position, spawnBtn.BackgroundColor3, spawnBtn.Text, spawnBtn.TextColor3, spawnBtn.Font, spawnBtn.TextSize, spawnBtn.BorderSizePixel = UDim2.new(0.18, 0, 0, 40), UDim2.new(0, 10, 1, -50), Color3.fromRGB(0, 120, 210), "SPAWN", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 14, 0
-    spawnBtn.MouseButton1Click:Connect(function() T.SpawnTornadoSimulation() end) Instance.new("UICorner", spawnBtn).CornerRadius = UDim.new(0,5)
-
-    local killBtn = Instance.new("TextButton", mainFrame) killBtn.Size, killBtn.Position, killBtn.BackgroundColor3, killBtn.Text, killBtn.TextColor3, killBtn.Font, killBtn.TextSize, killBtn.BorderSizePixel = UDim2.new(0.18, 0, 0, 40), UDim2.new(0.19, 5, 1, -50), Color3.fromRGB(180, 45, 45), "DELETE", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 14, 0
-    killBtn.MouseButton1Click:Connect(function() T.ClearActiveTornado() end) Instance.new("UICorner", killBtn).CornerRadius = UDim.new(0,5)
-
-    local resetMapBtn = Instance.new("TextButton", mainFrame) resetMapBtn.Size, resetMapBtn.Position, resetMapBtn.BackgroundColor3, resetMapBtn.Text, resetMapBtn.TextColor3, resetMapBtn.Font, resetMapBtn.TextSize, resetMapBtn.BorderSizePixel = UDim2.new(0.18, 0, 0, 40), UDim2.new(0.38, 0, 1, -50), Color3.fromRGB(100, 100, 110), "RESET MAP", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 14, 0
-    resetMapBtn.MouseButton1Click:Connect(function() T.ResetMap() end) Instance.new("UICorner", resetMapBtn).CornerRadius = UDim.new(0,5)
-
-    local cleanScorchBtn = Instance.new("TextButton", mainFrame) cleanScorchBtn.Size, cleanScorchBtn.Position, cleanScorchBtn.BackgroundColor3, cleanScorchBtn.Text, cleanScorchBtn.TextColor3, cleanScorchBtn.Font, cleanScorchBtn.TextSize, cleanScorchBtn.BorderSizePixel = UDim2.new(0.18, 0, 0, 40), UDim2.new(0.57, 0, 1, -50), Color3.fromRGB(130, 90, 40), "NO SCORCH", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 12, 0
-cleanScorchBtn.MouseButton1Click:Connect(function() T.ClearScorches() end) Instance.new("UICorner", cleanScorchBtn).CornerRadius = UDim.new(0,5)
+if Character:FindFirstChild("Humanoid") and RootPart then
+local currentDistanceToCore = (Vector3.new(RootPart.Position.X, 0, RootPart.Position.Z) - Vector3.new(baseAnchor.Position.X, 0, baseAnchor.Position.Z)).Magnitude
+local activeSuctionLimit = (cfg.MaxSize * 0.5) + 30 local coreThreshold = cfg.Width + 10
+if currentDistanceToCore <= activeSuctionLimit then
+if currentDistanceToCore <= coreThreshold then
+if Humanoid then Humanoid.CameraOffset = Vector3.new(0,0,0) end
+if cfg.PlayerSuction then angularPlayerOrbit = angularPlayerOrbit + (0.5 * dt) RootPart.AssemblyLinearVelocity = (Vector3.new(baseAnchor.Position.X + math.cos(angularPlayerOrbit) * currentDistanceToCore, RootPart.Position.Y, baseAnchor.Position.Z + math.sin(angularPlayerOrbit) * currentDistanceToCore) - RootPart.Position) * 3 end
+else
+if Humanoid then local intensity = math.clamp((1 - (currentDistanceToCore / activeSuctionLimit)) * 1.5, 0.1, 1.8) Humanoid.CameraOffset = Vector3.new(math.random(-100, 100) * 0.008 * intensity, math.random(-100, 100) * 0.008 * intensity, math.random(-100, 100) * 0.008 * intensity) end
+if cfg.PlayerSuction then angularPlayerOrbit = angularPlayerOrbit + ((velocityMagnitude / math.max(currentDistanceToCore, 10)) * dt)
+local rotX = baseAnchor.Position.X + math.cos(angularPlayerOrbit) * math.clamp(currentDistanceToCore - (12 * dt), coreThreshold + 2, activeSuctionLimit) local rotZ = baseAnchor.Position.Z + math.sin(angularPlayerOrbit) * math.clamp(currentDistanceToCore - (12 * dt), coreThreshold + 2, activeSuctionLimit)
+RootPart.AssemblyLinearVelocity = Vector3.new((rotX - RootPart.Position.X) * (12) * 0.7, 28, (rotZ - RootPart.Position.Z) * (12) * 0.7)
+end
+end
+elseif Humanoid then Humanoid.CameraOffset = Vector3.new(0,0,0) end
+end
+end
+local function CoreRenderPhysicsLoop(cfg, baseAnchor, funnelEmitter, stormCloud, hasInterceptedPlayer, currentTargetWaypoint, GetNewRandomWaypoint, lastPathTime, currentDescentScale, runtimeTicker, angularPlayerOrbit, rainEmitter, funnelAttach)
+CurrentRenderConnection = RunService.RenderStepped:Connect(function(dt)
+if not baseAnchor or not baseAnchor.Parent then return end
+runtimeTicker = runtimeTicker + dt
+local computedTopSize = cfg.MaxSize
+local baseWidth = cfg.Width
+if baseWidth <= 200 then
+baseWidth = cfg.Width + (math.sin(runtimeTicker * 2.5) * (cfg.Width * 0.3))
+computedTopSize = cfg.MaxSize + (math.cos(runtimeTicker * 1.8) * (cfg.MaxSize * 0.2))
+end
+if computedTopSize < 200 and funnelAttach then
+local driftX = math.sin(runtimeTicker * 1.2) * (computedTopSize * 0.4)
+local driftZ = math.cos(runtimeTicker * 0.9) * (computedTopSize * 0.4)
+funnelAttach.Acceleration = Vector3.new(driftX, 25, driftZ)
+else
+if funnelAttach then funnelAttach.Acceleration = Vector3.new(0, 25, 0) end
+end
+local distanceToVortex = (Vector3.new(RootPart.Position.X, 0, RootPart.Position.Z) - Vector3.new(baseAnchor.Position.X, 0, baseAnchor.Position.Z)).Magnitude
+local localizedProximityFactor = math.clamp(1 - (distanceToVortex / 1200), 0.05, 1)
+if rainEmitter and rainEmitter.Parent then
+rainEmitter.Rate = (cfg.Type == "DustDevil" and 0 or 450 * localizedProximityFactor)
+end
+local hour = Lighting:GetMinutesAfterMidnight() / 60
+local baseAmbientColor = Color3.fromRGB(35, 35, 38)
+local baseFogDensity = 0.65
+if hour >= 6 and hour < 11 then
+baseAmbientColor = Color3.fromRGB(45, 45, 48)
+baseFogDensity = 0.55
+elseif hour >= 11 and hour < 17 then
+baseAmbientColor = Color3.fromRGB(115, 115, 120)
+baseFogDensity = 0.45
+elseif hour >= 17 and hour < 20 then
+baseAmbientColor = Color3.fromRGB(30, 26, 30)
+baseFogDensity = 0.70
+else
+baseAmbientColor = Color3.fromRGB(8, 8, 12)
+baseFogDensity = 0.85
+end
+local currentFinalColor = baseAmbientColor
+if cfg.Type ~= "DustDevil" and math.random(1, 140) == 1 then
+currentFinalColor = Color3.fromRGB(240, 245, 255)
+Lighting.ExposureCompensation = 3
+task.delay(0.06, function() Lighting.ExposureCompensation = 0 end)
+end
+Lighting.OutdoorAmbient = Lighting.OutdoorAmbient:Lerp(currentFinalColor, dt * 1.5)
+Lighting.FogColor = Lighting.FogColor:Lerp(baseAmbientColor, dt * 1.5)
+Lighting.FogEnd = math.max(100, Lighting.FogEnd - ((Lighting.FogEnd - (1200 * (1 - baseFogDensity))) * dt * 0.8))
+if currentDescentScale < 1 then
+currentDescentScale = math.min(1, currentDescentScale + (dt / 4))
+funnelEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, baseWidth), NumberSequenceKeypoint.new(math.clamp(0.5 * currentDescentScale, 0.01, 0.98), (computedTopSize * 0.4) * currentDescentScale), NumberSequenceKeypoint.new(math.clamp(1 * currentDescentScale, 0.02, 1), computedTopSize * currentDescentScale)})
+else
+funnelEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, baseWidth), NumberSequenceKeypoint.new(0.5, computedTopSize * 0.45), NumberSequenceKeypoint.new(1, computedTopSize)})
+end
+stormCloud.CFrame = baseAnchor.CFrame * CFrame.new(0, cfg.Height, 0)
+local targetPosition = (cfg.InterceptTargetOnce and not hasInterceptedPlayer and RootPart.Position) or (cfg.MovementMode == "Follow Player" and RootPart.Position) or currentTargetWaypoint
+if cfg.InterceptTargetOnce and not hasInterceptedPlayer and (Vector3.new(baseAnchor.Position.X, 0, baseAnchor.Position.Z) - Vector3.new(RootPart.Position.X, 0, RootPart.Position.Z)).Magnitude < 25 then
+hasInterceptedPlayer, currentTargetWaypoint = true, GetNewRandomWaypoint()
+end
+local translationVector = (Vector3.new(targetPosition.X, baseAnchor.Position.Y, targetPosition.Z) - baseAnchor.Position)
+if translationVector.Magnitude < 20 and cfg.MovementMode == "Random" and not (cfg.InterceptTargetOnce and not hasInterceptedPlayer) then
+currentTargetWaypoint = GetNewRandomWaypoint()
+else
+baseAnchor.CFrame = CFrame.new(baseAnchor.Position + (translationVector.Unit * cfg.Speed * dt))
+end
+if runtimeTicker - lastPathTime > 0.4 then
+local ray = workspace:Raycast(baseAnchor.Position + Vector3.new(0, 10, 0), Vector3.new(0, -50, 0)) local groundPos = ray and ray.Position or baseAnchor.Position
+local sc = Instance.new("Part", ScorchFolder) sc.Size, sc.Transparency, sc.Anchored, sc.CanCollide, sc.CFrame = Vector3.new(baseWidth * 1.5, 0.1, baseWidth * 1.5), 1, true, false, CFrame.new(groundPos) * CFrame.Angles(0, math.random(0, 360), 0)
+local d = Instance.new("Decal", sc) d.Texture, d.Face, d.Color3 = SCORCH_DECAL, Enum.NormalId.Top, Color3.fromRGB(110, 85, 60)
+local pAtt = Instance.new("Attachment", sc) table.insert(PathPoints, { Position = groundPos, Attachment = pAtt })
+if #PathPoints > 1 then
+local prev = PathPoints[#PathPoints - 1] local b = Instance.new("Beam", sc) b.Attachment0, b.Attachment1, b.Width0, b.Width1, b.Color, b.FaceCamera = prev.Attachment, pAtt, 4, 4, ColorSequence.new(Color3.fromRGB(255, 80, 0)), true
+b.Enabled = TrackingActive
+PathPoints[#PathPoints].Beam = b
+end
+lastPathTime = runtimeTicker
+end
+if CurrentSatelliteTornado and CurrentSatelliteTornado:FindFirstChild("SimulationBase") then
+local satPart = CurrentSatelliteTornado.SimulationBase local orbitRadius = (computedTopSize * 0.6) + 40
+satPart.CFrame = CFrame.new(baseAnchor.Position.X + math.cos(runtimeTicker * 0.2) * orbitRadius, baseAnchor.Position.Y, baseAnchor.Position.Z + math.sin(runtimeTicker * 0.2) * orbitRadius)
+end
+if computedTopSize > 150 and math.random(1, 100) <= 4 and #CurrentActiveSubvortices < 4 then
+local subBase = Instance.new("Part", CurrentTornado) subBase.Size, subBase.Transparency, subBase.Anchored, subBase.CanCollide = Vector3.new(2,1,2), 1, true, false
+local subAttach = Instance.new("Attachment", subBase) local subEmitter = Instance.new("ParticleEmitter", subAttach)
+subEmitter.Texture, subEmitter.Rate, subEmitter.Lifetime, subEmitter.Speed, subEmitter.Acceleration, subEmitter.Color = "rbxasset://textures/particles/smoke_main.dds", 90, NumberRange.new(2, 4), NumberRange.new(30, 60), Vector3.new(0, 15, 0), ColorSequence.new(Color3.fromRGB(90,90,95))
+subEmitter.Size, subEmitter.RotSpeed = NumberSequence.new({NumberSequenceKeypoint.new(0, baseWidth * 0.4), NumberSequenceKeypoint.new(1, computedTopSize * 0.25)}), NumberRange.new(600, 1200)
+table.insert(CurrentActiveSubvortices, { Part = subBase, OffsetAngle = math.random(0, 360), SpawnTime = runtimeTicker, Duration = math.random(5, 12) })
+end
+local currentCopiedConfig = { MaxSize = computedTopSize, Width = baseWidth, Height = cfg.Height, WindSpeed = cfg.WindSpeed, PlayerSuction = cfg.PlayerSuction }
+ExecuteRenderSubLoop(dt, baseAnchor, currentCopiedConfig, runtimeTicker, cfg.WindSpeed * 0.45, angularPlayerOrbit)
+if TrackingActive then
+for _, p in ipairs(PathPoints) do if p.Beam then p.Beam.Enabled = true end end
+end
+end)
+end
+local function SpawnTornadoSimulation(overrideConfig)
+ClearActiveTornado()
+local cfg = overrideConfig or GlobalConfig
+local tType = cfg.Type or "Normal"
+local mainFolder = Instance.new("Folder") mainFolder.Name = "AtmosphericSimulation_Core" mainFolder.Parent = workspace CurrentTornado = mainFolder
+DebrisFolder = Instance.new("Folder") DebrisFolder.Name = "Tornado_Captured_Debris" DebrisFolder.Parent = mainFolder
+if not ScorchFolder then ScorchFolder = Instance.new("Folder", workspace) ScorchFolder.Name = "Tornado_Scorches" end
+local hasInterceptedPlayer = false
+local spawnCFrame = RootPart.CFrame * CFrame.new(0, 0, -cfg.SpawnDistance)
+local baseAnchor = Instance.new("Part") baseAnchor.Name = "SimulationBase" baseAnchor.Size = Vector3.new(10, 1, 10)
+local groundY = spawnCFrame.Position.Y
+local raycastResult = workspace:Raycast(spawnCFrame.Position, Vector3.new(0, -500, 0))
+if raycastResult then groundY = raycastResult.Position.Y end
+baseAnchor.CFrame = CFrame.new(spawnCFrame.Position.X, groundY, spawnCFrame.Position.Z)
+baseAnchor.Anchored, baseAnchor.CanCollide, baseAnchor.Transparency, baseAnchor.Parent = true, false, 1, mainFolder
+CurrentBaseAnchor = baseAnchor
+local stormCloud = Instance.new("Part") stormCloud.Name = "MesoStormCloud" stormCloud.Size = Vector3.new(5, 5, 5)
+stormCloud.Anchored, stormCloud.CanCollide, stormCloud.Transparency = true, false, 1
+stormCloud.CFrame = baseAnchor.CFrame * CFrame.new(0, cfg.Height, 0) stormCloud.Parent = mainFolder
+local cloudAttach = Instance.new("Attachment", stormCloud)
+local cloudEmitter = Instance.new("ParticleEmitter", cloudAttach)
+cloudEmitter.Texture, cloudEmitter.Rate, cloudEmitter.Lifetime, cloudEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", (tType == "DustDevil" and 40 or 180), NumberRange.new(8, 12), NumberRange.new(20, 45)
+cloudEmitter.SpreadAngle = Vector2.new(180, 180)
+cloudEmitter.Color = ColorSequence.new(tType == "DustDevil" and Color3.fromRGB(190, 140, 100) or Color3.fromRGB(45, 45, 55))
+cloudEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 80), NumberSequenceKeypoint.new(0.5, 250), NumberSequenceKeypoint.new(1, 350)})
+cloudEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, tType == "NonCondensation" and 1 or 0.4), NumberSequenceKeypoint.new(1, 1)})
+local windInflowEmitter = Instance.new("ParticleEmitter", baseAnchor)
+windInflowEmitter.Texture, windInflowEmitter.Rate, windInflowEmitter.Lifetime, windInflowEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", 60, NumberRange.new(2, 4), NumberRange.new(-90, -40)
+windInflowEmitter.SpreadAngle = Vector2.new(360, 360)
+windInflowEmitter.Color = ColorSequence.new(tType == "DustDevil" and Color3.fromRGB(180, 130, 90) or Color3.fromRGB(130, 130, 140))
+windInflowEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 15), NumberSequenceKeypoint.new(1, 2)})
+windInflowEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.8), NumberSequenceKeypoint.new(0.8, 0.2), NumberSequenceKeypoint.new(1, 1)})
+local funnelAttach = Instance.new("Attachment", baseAnchor)
+local funnelEmitter = Instance.new("ParticleEmitter", funnelAttach)
+funnelEmitter.Texture, funnelEmitter.Rate, funnelEmitter.Lifetime, funnelEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", 260, NumberRange.new(5, 8), NumberRange.new(50, 85)
+funnelEmitter.Acceleration, funnelEmitter.SpreadAngle, funnelEmitter.RotSpeed = Vector3.new(0, 25, 0), Vector2.new(8, 8), NumberRange.new(350, 700)
+funnelEmitter.Color = ColorSequence.new(tType == "DustDevil" and Color3.fromRGB(175, 125, 85) or Color3.fromRGB(110, 110, 115))
+local currentDescentScale = 0 funnelEmitter.Size = NumberSequence.new(0)
+funnelEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, tType == "NonCondensation" and 1 or 0.4), NumberSequenceKeypoint.new(1, 1)})
+local debrisFieldEmitter = Instance.new("ParticleEmitter", funnelAttach)
+debrisFieldEmitter.Texture, debrisFieldEmitter.Rate, debrisFieldEmitter.Lifetime, debrisFieldEmitter.Speed = "rbxasset://textures/particles/smoke_main.dds", 180, NumberRange.new(2, 4), NumberRange.new(25, 60)
+debrisFieldEmitter.SpreadAngle, debrisFieldEmitter.Color = Vector2.new(360, 45), ColorSequence.new(Color3.fromRGB(115, 100, 85))
+debrisFieldEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, cfg.Width * 1.5), NumberSequenceKeypoint.new(1, cfg.Width * 3.5)})
+debrisFieldEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(1, 1)})
+local globalRainAttach = Instance.new("Attachment", RootPart)
+local globalRainEmitter = Instance.new("ParticleEmitter", globalRainAttach)
+globalRainEmitter.Texture, globalRainEmitter.Rate, globalRainEmitter.Lifetime, globalRainEmitter.Speed = "rbxasset://textures/particles/rain.dds", (tType == "DustDevil" and 0 or 350), NumberRange.new(1, 2), NumberRange.new(80, 140)
+globalRainEmitter.Acceleration, globalRainEmitter.EmissionDirection = Vector3.new(-30, -50, -10), Enum.EmissionDirection.Bottom
+globalRainEmitter.Size, globalRainEmitter.Transparency = NumberSequence.new(2), NumberSequence.new({NumberSequenceKeypoint.new(0, 0.4), NumberSequenceKeypoint.new(1, 1)})
+local sound = Instance.new("Sound", baseAnchor) sound.SoundId, sound.Volume, sound.Looped, sound.RollOffMaxDistance, sound.Parent = SOUND_ID, (tType == "DustDevil" and 1.5 or 3), true, 1200, baseAnchor sound:Play()
+local function GetNewRandomWaypoint() return Vector3.new(baseAnchor.Position.X + math.random(-500, 500), baseAnchor.Position.Y, baseAnchor.Position.Z + math.random(-500, 500)) end
+local currentTargetWaypoint = GetNewRandomWaypoint()
+if cfg.SatelliteEnabled then
+local satFolder = Instance.new("Folder") satFolder.Name = "Satellite_Companion" satFolder.Parent = mainFolder CurrentSatelliteTornado = satFolder
+local satBase = Instance.new("Part") satBase.Size, satBase.Transparency, satBase.Anchored, satBase.CanCollide, satBase.Parent = Vector3.new(4,1,4), 1, true, false, satFolder
+local satAttach = Instance.new("Attachment", satBase)
+local satEmitter = Instance.new("ParticleEmitter", satAttach)
+satEmitter.Texture, satEmitter.Rate, satEmitter.Lifetime, satEmitter.Speed, satEmitter.Acceleration, satEmitter.Color = "rbxasset://textures/particles/smoke_main.dds", 120, NumberRange.new(4, 6), NumberRange.new(40, 70), Vector3.new(0, 20, 0), ColorSequence.new(Color3.fromRGB(120, 120, 130))
+satEmitter.Size, satEmitter.RotSpeed = NumberSequence.new({NumberSequenceKeypoint.new(0, cfg.Width * 0.3), NumberSequenceKeypoint.new(1, cfg.MaxSize * 0.3)}), NumberRange.new(400, 800)
+end
+SimulatedDebrisList = {}
+local runtimeTicker, angularPlayerOrbit, lastPathTime = 0, 0, 0
+CoreRenderPhysicsLoop(cfg, baseAnchor, funnelEmitter, stormCloud, hasInterceptedPlayer, currentTargetWaypoint, GetNewRandomWaypoint, lastPathTime, currentDescentScale, runtimeTicker, angularPlayerOrbit, globalRainEmitter, funnelAttach)
+end
+local function GenerateVortexManipulatorTool()
+local bp = LocalPlayer:WaitForChild("Backpack") local toolName = "Tornado Control Wand"
+for _, t in ipairs(bp:GetChildren()) do if t.Name == toolName then t:Destroy() end end
+if Character:FindFirstChild(toolName) then Character[toolName]:Destroy() end
+local tool = Instance.new("Tool") tool.Name, tool.RequiresHandle = toolName, true
+local handle = Instance.new("Part", tool) handle.Name, handle.Size, handle.Color, handle.Material = "Handle", Vector3.new(1, 4, 1), Color3.fromRGB(0, 162, 255), Enum.Material.Neon
+tool.Activated:Connect(function() if CurrentTornado then ClearActiveTornado() else SpawnTornadoSimulation() end end)
+tool.Parent = bp tool:Clone().Parent = Character
+end
+local function GenerateAerialMapTool()
+local bp = LocalPlayer:WaitForChild("Backpack") local toolName = "Aerial Tracker Map"
+for _, t in ipairs(bp:GetChildren()) do if t.Name == toolName then t:Destroy() end end
+if Character:FindFirstChild(toolName) then Character[toolName]:Destroy() end
+local tool = Instance.new("Tool") tool.Name, tool.RequiresHandle = toolName, true
+local handle = Instance.new("Part", tool) handle.Name, handle.Size, handle.Color, handle.Material = "Handle", Vector3.new(1.2, 1.2, 1.2), Color3.fromRGB(0, 220, 110), Enum.Material.Glass
+tool.Activated:Connect(function()
+TrackingActive = not TrackingActive local cam = workspace.CurrentCamera
+if TrackingActive then cam.CameraType = Enum.CameraType.Scriptable
+MapCameraConnection = RunService.RenderStepped:Connect(function()
+if CurrentTornado and CurrentTornado:FindFirstChild("SimulationBase") then local bp = CurrentTornado.SimulationBase.Position cam.CFrame = CFrame.new(bp + Vector3.new(0, 950, 0), bp) else cam.CFrame = CFrame.new(RootPart.Position + Vector3.new(0, 950, 0), RootPart.Position) end
+end)
+else
+if MapCameraConnection then MapCameraConnection:Disconnect() MapCameraConnection = nil end
+cam.CameraType = Enum.CameraType.Custom
+for _, p in ipairs(PathPoints) do if p.Beam then p.Beam.Enabled = false end end
+end
+end)
+tool.Unequipped:Connect(function() TrackingActive = false if MapCameraConnection then MapCameraConnection:Disconnect() MapCameraConnection = nil end workspace.CurrentCamera.CameraType = Enum.CameraType.Custom for _, p in ipairs(PathPoints) do if p.Beam then p.Beam.Enabled = false end end end)
+tool.Parent = bp tool:Clone().Parent = Character
+end
+local function BuildControllerScreenGui()
+local guiName = "VortexSimulation_Dashboard" local original = UI_TargetContainer:FindFirstChild(guiName) if original then original:Destroy() end
+local screenGui = Instance.new("ScreenGui") screenGui.Name, screenGui.ResetOnSpawn = guiName, false screenGui.Parent = UI_TargetContainer
+local mainFrame = Instance.new("Frame") mainFrame.Size, mainFrame.Position, mainFrame.BackgroundColor3, mainFrame.BorderSizePixel, mainFrame.Active, mainFrame.Draggable, mainFrame.Visible, mainFrame.Parent = UDim2.new(0, 580, 0, 420), UDim2.new(0.5, -290, 0.5, -210), Color3.fromRGB(30, 30, 35), 0, true, true, true, screenGui
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
+local headerTitle = Instance.new("TextLabel", mainFrame) headerTitle.Size, headerTitle.BackgroundTransparency, headerTitle.Text, headerTitle.TextColor3, headerTitle.Font, headerTitle.TextSize, headerTitle.TextXAlignment = UDim2.new(1, -40, 0, 40), 1, "  🌪️ ATMOSPHERIC STORM SIMULATION CONTROLLER", Color3.fromRGB(240, 240, 255), Enum.Font.SourceSansBold, 18, Enum.TextXAlignment.Left
+local closeBtn = Instance.new("TextButton", mainFrame) closeBtn.Size, closeBtn.Position, closeBtn.BackgroundTransparency, closeBtn.Text, closeBtn.TextColor3, closeBtn.TextSize, closeBtn.Font = UDim2.new(0, 40, 0, 40), UDim2.new(1, -40, 0, 0), 1, "✕", Color3.fromRGB(255, 90, 90), 20, Enum.Font.SourceSansBold
+closeBtn.MouseButton1Click:Connect(function() mainFrame.Visible = false end)
+local leftContainer = Instance.new("ScrollingFrame", mainFrame) leftContainer.Size, leftContainer.Position, leftContainer.BackgroundTransparency, leftContainer.CanvasSize, leftContainer.ScrollBarThickness = UDim2.new(0.6, -10, 1, -50), UDim2.new(0, 10, 0, 45), 1, UDim2.new(0, 0, 1.8, 0), 4
+Instance.new("UIListLayout", leftContainer).Padding = UDim.new(0, 8)
+local function CreateInputControl(labelText, defaultVal, callback)
+local frame = Instance.new("Frame") frame.Size, frame.BackgroundTransparency, frame.Parent = UDim2.new(1, -10, 0, 40), 1, leftContainer
+local lbl = Instance.new("TextLabel", frame) lbl.Size, lbl.Text, lbl.TextColor3, lbl.Font, lbl.TextSize, lbl.TextXAlignment, lbl.BackgroundTransparency = UDim2.new(0.6, 0, 1, 0), labelText, Color3.fromRGB(200,200,205), Enum.Font.SourceSans, 15, Enum.TextXAlignment.Left, 1
+local box = Instance.new("TextBox", frame) box.Size, box.Position, box.BackgroundColor3, box.Text, box.TextColor3, box.Font, box.TextSize, box.BorderSizePixel = UDim2.new(0.4, -5, 0.8, 0), UDim2.new(0.6, 5, 0.1, 0), Color3.fromRGB(45,45,50), tostring(defaultVal), Color3.fromRGB(255,255,255), Enum.Font.SourceSans, 14, 0
+box.FocusLost:Connect(function() local num = tonumber(box.Text) if num then callback(num) end end) Instance.new("UICorner", box).CornerRadius = UDim.new(0,4)
+end
+local function CreateToggleControl(labelText, defaultState, callback)
+local frame = Instance.new("Frame") frame.Size, frame.BackgroundTransparency, frame.Parent = UDim2.new(1, -10, 0, 40), 1, leftContainer
+local lbl = Instance.new("TextLabel", frame) lbl.Size, lbl.Text, lbl.TextColor3, lbl.Font, lbl.TextSize, lbl.TextXAlignment, lbl.BackgroundTransparency = UDim2.new(0.6, 0, 1, 0), labelText, Color3.fromRGB(200,200,205), Enum.Font.SourceSans, 15, Enum.TextXAlignment.Left, 1
+local btn = Instance.new("TextButton", frame) btn.Size, btn.Position, btn.BackgroundColor3, btn.Text, btn.TextColor3, btn.Font, btn.TextSize, btn.BorderSizePixel = UDim2.new(0.4, -5, 0.8, 0), UDim2.new(0.6, 5, 0.1, 0), defaultState and Color3.fromRGB(0, 140, 100) or Color3.fromRGB(120, 40, 40), defaultState and "ENABLED" or "DISABLED", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 13, 0
+local state = defaultState btn.MouseButton1Click:Connect(function() state = not state btn.BackgroundColor3 = state and Color3.fromRGB(0, 140, 100) or Color3.fromRGB(120, 40, 40) btn.Text = state and "ENABLED" or "DISABLED" callback(state) end) Instance.new("UICorner", btn).CornerRadius = UDim.new(0,4)
+end
+CreateInputControl("Base Size (Width):", GlobalConfig.Width, function(v) GlobalConfig.Width = v end)
+CreateInputControl("Top Size (MaxSize):", GlobalConfig.MaxSize, function(v) GlobalConfig.MaxSize = v end)
+CreateInputControl("Displacement Speed:", GlobalConfig.Speed, function(v) GlobalConfig.Speed = v end)
+CreateInputControl("Spawn Distance Set:", GlobalConfig.SpawnDistance, function(v) GlobalConfig.SpawnDistance = v end)
+CreateInputControl("Wind Speed (MPH):", GlobalConfig.WindSpeed, function(v) GlobalConfig.WindSpeed = v end)
+CreateToggleControl("Player Suction Interaction:", GlobalConfig.PlayerSuction, function(s) GlobalConfig.PlayerSuction = s end)
+CreateToggleControl("Satellite Tornado:", GlobalConfig.SatelliteEnabled, function(s) GlobalConfig.SatelliteEnabled = s end)
+CreateToggleControl("Instant Strike Intercept:", GlobalConfig.InterceptTargetOnce, function(s) GlobalConfig.InterceptTargetOnce = s end)
+CreateToggleControl("Follow Player Track Mode:", false, function(s) GlobalConfig.MovementMode = s and "Follow Player" or "Random" end)
+local spawnBtn = Instance.new("TextButton", mainFrame) spawnBtn.Size, spawnBtn.Position, spawnBtn.BackgroundColor3, spawnBtn.Text, spawnBtn.TextColor3, spawnBtn.Font, spawnBtn.TextSize, spawnBtn.BorderSizePixel = UDim2.new(0.18, 0, 0, 40), UDim2.new(0, 10, 1, -50), Color3.fromRGB(0, 120, 210), "SPAWN", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 14, 0
+spawnBtn.MouseButton1Click:Connect(function() GlobalConfig.Type = "Normal" SpawnTornadoSimulation() end) Instance.new("UICorner", spawnBtn).CornerRadius = UDim.new(0,5)
+local rngBtn = Instance.new("TextButton", mainFrame) rngBtn.Size, rngBtn.Position, rngBtn.BackgroundColor3, rngBtn.Text, rngBtn.TextColor3, rngBtn.Font, rngBtn.TextSize, rngBtn.BorderSizePixel = UDim2.new(0.18, 0, 0, 40), UDim2.new(0, 120, 1, -50), Color3.fromRGB(150, 0, 210), "RNG SPAWN", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 12, 0
+rngBtn.MouseButton1Click:Connect(function()
+local pool = {"Normal", "DustDevil", "NonCondensation"}
+local pickedType = pool[math.random(1, #pool)]
+local rngWidth, rngMaxSize = math.random(5, 60), math.random(30, 450)
+if pickedType == "DustDevil" then
+local devilScale = math.random(1, 3)
+if devilScale == 1 then rngWidth, rngMaxSize = math.random(2, 4), math.random(8, 15)
+elseif devilScale == 2 then rngWidth, rngMaxSize = math.random(6, 12), math.random(25, 45)
+else rngWidth, rngMaxSize = math.random(18, 35), math.random(75, 120) end
+end
+SpawnTornadoSimulation({
+Width = rngWidth, MaxSize = rngMaxSize,
+Speed = math.random(3, 22), Height = math.random(350, 850),
+WindSpeed = math.random(50, 310), Type = pickedType,
+SpawnDistance = GlobalConfig.SpawnDistance, MovementMode = GlobalConfig.MovementMode,
+PlayerSuction = GlobalConfig.PlayerSuction, SatelliteEnabled = GlobalConfig.SatelliteEnabled,
+InterceptTargetOnce = GlobalConfig.InterceptTargetOnce
+})
+end) Instance.new("UICorner", rngBtn).CornerRadius = UDim.new(0,5)
+local killBtn = Instance.new("TextButton", mainFrame) killBtn.Size, killBtn.Position, killBtn.BackgroundColor3, killBtn.Text, killBtn.TextColor3, killBtn.Font, killBtn.TextSize, killBtn.BorderSizePixel = UDim2.new(0.18, 0, 0, 40), UDim2.new(0.19, 125, 1, -50), Color3.fromRGB(180, 45, 45), "DELETE", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 14, 0
+killBtn.MouseButton1Click:Connect(function() ClearActiveTornado() end) Instance.new("UICorner", killBtn).CornerRadius = UDim.new(0,5)
+local resetMapBtn = Instance.new("TextButton", mainFrame) resetMapBtn.Size, resetMapBtn.Position, resetMapBtn.BackgroundColor3, resetMapBtn.Text, resetMapBtn.TextColor3, resetMapBtn.Font, resetMapBtn.TextSize, resetMapBtn.BorderSizePixel = UDim2.new(0.18, 0, 0, 40), UDim2.new(0.38, 120, 1, -50), Color3.fromRGB(100, 100, 110), "RESET MAP", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 14, 0
+resetMapBtn.MouseButton1Click:Connect(function() ResetMap() end) Instance.new("UICorner", resetMapBtn).CornerRadius = UDim.new(0,5)
+local cleanScorchBtn = Instance.new("TextButton", mainFrame) cleanScorchBtn.Size, cleanScorchBtn.Position, cleanScorchBtn.BackgroundColor3, cleanScorchBtn.Text, cleanScorchBtn.TextColor3, cleanScorchBtn.Font, cleanScorchBtn.TextSize, cleanScorchBtn.BorderSizePixel = UDim2.new(0.18, 0, 0, 40), UDim2.new(0.57, 120, 1, -50), Color3.fromRGB(130, 90, 40), "NO SCORCH", Color3.fromRGB(255,255,255), Enum.Font.SourceSansBold, 12, 0
+cleanScorchBtn.MouseButton1Click:Connect(function() ClearScorches() end) Instance.new("UICorner", cleanScorchBtn).CornerRadius = UDim.new(0,5)
 local rightTabFrame = Instance.new("Frame", mainFrame) rightTabFrame.Size, rightTabFrame.Position, rightTabFrame.BackgroundColor3, rightTabFrame.BorderSizePixel = UDim2.new(0.4, -15, 1, -50), UDim2.new(0.6, 5, 0, 45), Color3.fromRGB(22, 22, 26), 0 Instance.new("UICorner", rightTabFrame).CornerRadius = UDim.new(0,6)
 local tabTitle = Instance.new("TextLabel", rightTabFrame) tabTitle.Size, tabTitle.BackgroundTransparency, tabTitle.Text, tabTitle.TextColor3, tabTitle.Font, tabTitle.TextSize = UDim2.new(1, 0, 0, 30), 1, "PRESETS", Color3.fromRGB(255, 215, 0), Enum.Font.SourceSansBold, 14
 local scrollPresets = Instance.new("ScrollingFrame", rightTabFrame) scrollPresets.Size, scrollPresets.Position, scrollPresets.BackgroundTransparency, scrollPresets.CanvasSize, scrollPresets.ScrollBarThickness = UDim2.new(1, -10, 1, -35), UDim2.new(0, 5, 0, 32), 1, UDim2.new(0, 0, 2.5, 0), 4
 Instance.new("UIListLayout", scrollPresets).Padding = UDim.new(0, 5)
-for pName, pData in pairs(T.HistoricalPresets) do
+for pName, pData in pairs(HistoricalPresets) do
 local pBtn = Instance.new("TextButton", scrollPresets) pBtn.Size, pBtn.BackgroundColor3, pBtn.Text, pBtn.TextColor3, pBtn.Font, pBtn.TextSize, pBtn.BorderSizePixel = UDim2.new(1, -5, 0, 30), Color3.fromRGB(40, 42, 52), pName, Color3.fromRGB(230, 230, 240), Enum.Font.SourceSans, 13, 0 Instance.new("UICorner", pBtn).CornerRadius = UDim.new(0,4)
 pBtn.MouseButton1Click:Connect(function()
-T.SpawnTornadoSimulation({ Width = pData.Width, MaxSize = pData.MaxSize, Speed = pData.Speed, Height = pData.Height, Suction = pData.Suction, WindSpeed = pData.WindSpeed, SpawnDistance = T.GlobalConfig.SpawnDistance, MovementMode = T.GlobalConfig.MovementMode, PlayerSuction = T.GlobalConfig.PlayerSuction, SatelliteEnabled = T.GlobalConfig.SatelliteEnabled, InterceptTargetOnce = T.GlobalConfig.InterceptTargetOnce })
+SpawnTornadoSimulation({ Width = pData.Width, MaxSize = pData.MaxSize, Speed = pData.Speed, Height = pData.Height, Suction = pData.Suction, WindSpeed = pData.WindSpeed, Type = pData.Type or "Normal", SpawnDistance = GlobalConfig.SpawnDistance, MovementMode = GlobalConfig.MovementMode, PlayerSuction = GlobalConfig.PlayerSuction, SatelliteEnabled = GlobalConfig.SatelliteEnabled, InterceptTargetOnce = GlobalConfig.InterceptTargetOnce })
 end)
 end
-endlocal T = _G.TornadoSystem
-
-if T.CurrentRenderConnection then T.CurrentRenderConnection:Disconnect() end
-
-T.CoreRenderPhysicsLoop = function(cfg, baseAnchor, funnelEmitter, stormCloud, hasInterceptedPlayer, currentTargetWaypoint, GetNewRandomWaypoint, lastPathTime, currentDescentScale, runtimeTicker, angularPlayerOrbit, rainEmitter)
-    T.CurrentRenderConnection = T.RunService.RenderStepped:Connect(function(dt)
-        if not baseAnchor or not baseAnchor.Parent then return end
-        runtimeTicker = runtimeTicker + dt
-
-        local computedTopSize = cfg.MaxSize
-        local baseWidth = cfg.Width
-        
-        if baseWidth <= 200 then
-            baseWidth = cfg.Width + (math.sin(runtimeTicker * 2.5) * (cfg.Width * 0.3))
-            computedTopSize = cfg.MaxSize + (math.cos(runtimeTicker * 1.8) * (cfg.MaxSize * 0.2))
-        end
-
-        local distanceToVortex = (Vector3.new(T.RootPart.Position.X, 0, T.RootPart.Position.Z) - Vector3.new(baseAnchor.Position.X, 0, baseAnchor.Position.Z)).Magnitude
-        local localizedProximityFactor = math.clamp(1 - (distanceToVortex / 1200), 0.05, 1)
-
-        if rainEmitter and rainEmitter.Parent then
-            rainEmitter.Rate = 450 * localizedProximityFactor
-        end
-
-        local hour = T.Lighting:GetMinutesAfterMidnight() / 60
-        local baseAmbientColor = Color3.fromRGB(35, 35, 38)
-        local baseFogDensity = 0.65
-        
-        if hour >= 6 and hour < 11 then
-            baseAmbientColor = Color3.fromRGB(45, 45, 48)
-            baseFogDensity = 0.55
-        elseif hour >= 11 and hour < 17 then
-            baseAmbientColor = Color3.fromRGB(115, 115, 120)
-            baseFogDensity = 0.45
-        elseif hour >= 17 and hour < 20 then
-            baseAmbientColor = Color3.fromRGB(30, 26, 30)
-            baseFogDensity = 0.70
-        else
-            baseAmbientColor = Color3.fromRGB(8, 8, 12)
-            baseFogDensity = 0.85
-        end
-
-        local currentFinalColor = baseAmbientColor
-        if math.random(1, 140) == 1 then
-            currentFinalColor = Color3.fromRGB(240, 245, 255)
-            T.Lighting.ExposureCompensation = 3
-            task.delay(0.06, function() T.Lighting.ExposureCompensation = 0 end)
-        end
-
-        T.Lighting.OutdoorAmbient = T.Lighting.OutdoorAmbient:Lerp(currentFinalColor, dt * 1.5)
-        T.Lighting.FogColor = T.Lighting.FogColor:Lerp(baseAmbientColor, dt * 1.5)
-        T.Lighting.FogEnd = math.max(100, T.Lighting.FogEnd - ((T.Lighting.FogEnd - (1200 * (1 - baseFogDensity))) * dt * 0.8))
-
-        if currentDescentScale < 1 then
-            currentDescentScale = math.min(1, currentDescentScale + (dt / 4))
-            funnelEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, baseWidth), NumberSequenceKeypoint.new(math.clamp(0.5 * currentDescentScale, 0.01, 0.98), (computedTopSize * 0.4) * currentDescentScale), NumberSequenceKeypoint.new(math.clamp(1 * currentDescentScale, 0.02, 1), computedTopSize * currentDescentScale)})
-        else
-            funnelEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, baseWidth), NumberSequenceKeypoint.new(0.5, computedTopSize * 0.45), NumberSequenceKeypoint.new(1, computedTopSize)})
-        end
-
-        stormCloud.CFrame = baseAnchor.CFrame * CFrame.new(0, cfg.Height, 0)
-        local targetPosition = (cfg.InterceptTargetOnce and not hasInterceptedPlayer and T.RootPart.Position) or (cfg.MovementMode == "Follow Player" and T.RootPart.Position) or currentTargetWaypoint
-        
-        if cfg.InterceptTargetOnce and not hasInterceptedPlayer and (Vector3.new(baseAnchor.Position.X, 0, baseAnchor.Position.Z) - Vector3.new(T.RootPart.Position.X, 0, T.RootPart.Position.Z)).Magnitude < 25 then
-            hasInterceptedPlayer, currentTargetWaypoint = true, GetNewRandomWaypoint()
-        end
-
-        local translationVector = (Vector3.new(targetPosition.X, baseAnchor.Position.Y, targetPosition.Z) - baseAnchor.Position)
-        if translationVector.Magnitude < 20 and cfg.MovementMode == "Random" and not (cfg.InterceptTargetOnce and not hasInterceptedPlayer) then
-            currentTargetWaypoint = GetNewRandomWaypoint()
-        else
-            baseAnchor.CFrame = CFrame.new(baseAnchor.Position + (translationVector.Unit * cfg.Speed * dt))
-        end
-
-        if runtimeTicker - lastPathTime > 0.4 then
-            local ray = workspace:Raycast(baseAnchor.Position + Vector3.new(0, 10, 0), Vector3.new(0, -50, 0)) local groundPos = ray and ray.Position or baseAnchor.Position
-            local sc = Instance.new("Part", T.ScorchFolder) sc.Size, sc.Transparency, sc.Anchored, sc.CanCollide, sc.CFrame = Vector3.new(baseWidth * 1.5, 0.1, baseWidth * 1.5), 1, true, false, CFrame.new(groundPos) * CFrame.Angles(0, math.random(0, 360), 0)
-            local d = Instance.new("Decal", sc) d.Texture, d.Face, d.Color3 = T.SCORCH_DECAL(T.SCORCH_DECAL_ID), Enum.NormalId.Top, Color3.fromRGB(110, 85, 60)
-            local pAtt = Instance.new("Attachment", sc) table.insert(T.PathPoints, { Position = groundPos, Attachment = pAtt })
-            if #T.PathPoints > 1 then 
-                local prev = T.PathPoints[#T.PathPoints - 1] local b = Instance.new("Beam", sc) b.Attachment0, b.Attachment1, b.Width0, b.Width1, b.Color, b.FaceCamera = prev.Attachment, pAtt, 4, 4, ColorSequence.new(Color3.fromRGB(255, 80, 0)), true 
-                b.Enabled = T.TrackingActive
-                T.PathPoints[#T.PathPoints].Beam = b 
-            end
-            lastPathTime = runtimeTicker
-        end
-
-        if T.CurrentSatelliteTornado and T.CurrentSatelliteTornado:FindFirstChild("SimulationBase") then
-            local satPart = T.CurrentSatelliteTornado.SimulationBase local orbitRadius = (computedTopSize * 0.6) + 40
-            satPart.CFrame = CFrame.new(baseAnchor.Position.X + math.cos(runtimeTicker * 0.2) * orbitRadius, baseAnchor.Position.Y, baseAnchor.Position.Z + math.sin(runtimeTicker * 0.2) * orbitRadius)
-        end
-
-        if computedTopSize > 150 and math.random(1, 100) <= 4 and #T.CurrentActiveSubvortices < 4 then
-            local subBase = Instance.new("Part", T.CurrentTornado) subBase.Size, subBase.Transparency, subBase.Anchored, subBase.CanCollide = Vector3.new(2,1,2), 1, true, false
-            local subAttach = Instance.new("Attachment", subBase) local subEmitter = Instance.new("ParticleEmitter", subAttach)
-            subEmitter.Texture, subEmitter.Rate, subEmitter.Lifetime, subEmitter.Speed, subEmitter.Acceleration, subEmitter.Color = "rbxasset://textures/particles/smoke_main.dds", 90, NumberRange.new(2, 4), NumberRange.new(30, 60), Vector3.new(0, 15, 0), ColorSequence.new(Color3.fromRGB(90,90,95))
-            subEmitter.Size, subEmitter.RotSpeed = NumberSequence.new({NumberSequenceKeypoint.new(0, baseWidth * 0.4), NumberSequenceKeypoint.new(1, computedTopSize * 0.25)}), NumberRange.new(600, 1200)
-            table.insert(T.CurrentActiveSubvortices, { Part = subBase, OffsetAngle = math.random(0, 360), SpawnTime = runtimeTicker, Duration = math.random(5, 12) })
-        end
-
-        local currentCopiedConfig = { MaxSize = computedTopSize, Width = baseWidth, Height = cfg.Height, WindSpeed = cfg.WindSpeed, PlayerSuction = cfg.PlayerSuction }
-        T.ExecuteRenderSubLoop(dt, baseAnchor, currentCopiedConfig, runtimeTicker, cfg.WindSpeed * 0.45, angularPlayerOrbit)
-        
-        if T.TrackingActive then
-            for _, p in ipairs(T.PathPoints) do if p.Beam then p.Beam.Enabled = true end end
-        end
-    end)
+local toggleToolName = "Storm Control UI Trigger" local uiTool = LocalPlayer.Backpack:FindFirstChild(toggleToolName) or Character:FindFirstChild(toggleToolName) if uiTool then uiTool:Destroy() end
+local triggerTool = Instance.new("Tool") triggerTool.Name, triggerTool.RequiresHandle = toggleToolName, true
+local th = Instance.new("Part", triggerTool) th.Name, th.Size, th.Color, th.Material = "Handle", Vector3.new(1.2, 1.2, 1.2), Color3.fromRGB(255, 185, 0), Enum.Material.Glass
+triggerTool.Activated:Connect(function() mainFrame.Visible = not mainFrame.Visible end) triggerTool.Parent = LocalPlayer.Backpack
 end
-
-T.GenerateVortexManipulatorTool() T.GenerateAerialMapTool() T.BuildControllerScreenGui()
+GenerateVortexManipulatorTool() GenerateAerialMapTool() BuildControllerScreenGui()
